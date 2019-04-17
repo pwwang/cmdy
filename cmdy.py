@@ -6,9 +6,9 @@ import time
 import threading
 import subprocess
 from simpleconf import Config
-from modkit import modkit
+from modkit import Modkit
 
-modkit.ban('os', 'sys', 'time', 'quote', 'threading', 'subprocess', 'Config', 'Queue', 'QueueEmpty', 'IS_PY3')
+Modkit().ban('os', 'sys', 'time', 'quote', 'threading', 'subprocess', 'Config', 'Queue', 'QueueEmpty', 'IS_PY3')
 
 try:  # py3
 	from shlex import quote

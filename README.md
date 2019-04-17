@@ -20,6 +20,7 @@ pip install cmdy
   ls(l = False) # not work
   ```
 - Unable to save configurations for commands, since commands have their solid preferences. 
+- Unable to alias a command.
 - No pipe/redirection notations.
 
 ## Basic usage
@@ -165,6 +166,18 @@ ls(l = True, _pipe = True) | cut(f = 5, _fg = True)
 ```python
 from cmdy import git
 print(git.branch(v = True))
+```
+
+## Aliasing commands
+```python
+from cmdy import fc_cache
+fc_cache(_exe = 'fc-cache', vf = '~/.fonts/', _prefix = '-')
+# fc-cache -vf ~/.fonts/
+```
+Always alias `fc_cache` to `fc-cache`, add the following to your `~/.cmdy.ini`
+```ini
+[fc_cache]
+_exe = fc-cache
 ```
 
 ## Configuration
