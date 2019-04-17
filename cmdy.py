@@ -287,6 +287,8 @@ class CmdyResult(object):
 
 		self.call_args['_okcode'] = [oc if isinstance(oc, int) else int(oc.strip()) for oc in okcode]
 
+		self.call_args['_timeout'] = int(self.call_args['_timeout'])
+
 		if call_args['_fg']:
 			self.popen_args['stdout'] = sys.stdout
 			self.popen_args['stderr'] = sys.stderr
@@ -383,6 +385,7 @@ class CmdyResult(object):
 					if time.time() - t0 > self.call_args['_timeout']:
 						self.p.terminate()
 						raise CmdyTimeoutException(self)
+				break
 			else:
 				self.p.wait()
 				break
@@ -452,6 +455,8 @@ class CmdyResult(object):
 	def stdout(self):
 		if not self.done:
 			raise RuntimeError('Command not started to run yet.')
+		elif self.call_args['_fg']:
+			return ''
 		elif not self.p:
 			raise RuntimeError('Failed to open a process.')
 		elif self.call_args['_bg'] and self.p.poll() is None:

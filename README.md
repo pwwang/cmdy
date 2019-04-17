@@ -14,10 +14,10 @@ pip install cmdy
 - Unable to replace arguments with baked command, see example below:
   ```
   from sh import ls
-  ll = ls.bake(l = True)
-  print(ll()) # ls -l
-  # but now I somehow want to run `ls` (without `-l`) command with `ll`
-  ll(l = False) # not work
+  ls = ls.bake(l = True)
+  print(ls()) # ls -l
+  # but now I somehow want to run `ls` (without `-l`) command with `ls()`
+  ls(l = False) # not work
   ```
 - Unable to save configurations for commands, since commands have their solid preferences. 
 - No pipe/redirection notations.
@@ -200,9 +200,11 @@ _timeout: 3
 ```python
 from cmdy import sleep
 sleep(4) # raise CmdyTimeoutExceptioin
-
+```
+```python
 import os
-os.environ['CMDY_sleep__timeout'] = 5
+os.environ['CMDY_sleep__timeout'] = '5'
+from cmdy import sleep
 sleep(4) # ok
 ```
 

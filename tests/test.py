@@ -1,6 +1,4 @@
-from cmdy import ls
-
-ls = ls.bake(l = True)
-ls(_fg = True)
-
-ls(l = False, _fg = True)
+import os
+os.environ['CMDY_sleep__timeout'] = '5'
+from cmdy import sleep
+sleep(4) # ok
