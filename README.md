@@ -172,6 +172,12 @@ p.wait()
 ```
 
 ## Baking
+```python
+from cmdy import java
+picard = java.bake(dict(jar = 'picard.jar', _sep = ' ', _prefix = '-'))
+#picard.SortSam(...)
+```
+
 Unlike `sh`, `cmdy` holds the keyword arguments, and updates them while baked into a new command. This enables it to replace some arguments with the new baked command.  
 ```python
 from cmdy import ls
