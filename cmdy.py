@@ -5,6 +5,7 @@ import sys
 import time
 import threading
 import subprocess
+from collections import OrderedDict
 from simpleconf import Config
 from modkit import Modkit
 
@@ -19,8 +20,9 @@ except ImportError:  # py2
 	from Queue import Queue, Empty as QueueEmpty
 	IS_PY3 = False
 
-DEVOUT = "/dev/stdout"
-DEVERR = "/dev/stdout"
+DEVERR  = '/dev/stderr'
+DEVOUT  = '/dev/stdout'
+DEVNULL = '/dev/null'
 
 class _Utils:
 
@@ -35,6 +37,7 @@ class _Utils:
 		'_bake'    : False,
 		'_iter'    : False,
 		'_pipe'    : False,
+		'_raw'     : False,
 		'_timeout' : 0,
 		'_encoding': 'utf-8',
 		'_bg'      : False,
@@ -49,16 +52,20 @@ class _Utils:
 	popen_arg_keys = ('_bufsize', '_executable', '_stdin', '_stdout', '_stderr', '_preexec_fn', '_close_fds', \
 		'_shell', '_cwd', '_env', '_universal_newlines', '_startupinfo', '_creationflags', '_restore_signals', \
 		'_start_new_session', '_pass_fds', '_encoding', '_errors', '_text')
-	kw_arg_keys         = ('_sep', '_prefix', '_dupkey')
+	kw_arg_keys         = ('_sep', '_prefix', '_dupkey', '_raw')
 	call_arg_keys       = ('_exe', '_okcode', '_bake', '_iter', '_pipe', '_timeout', '_bg', '_fg', '_out', '_out_', '_err', '_err_')
 	call_arg_validators = (
 		('_out', '_pipe', 'Cannot pipe a command with outfile specified.'),
 		('_out', '_out_', 'Cannot set both _out and _out_.'),
 		('_err', '_err_', 'Cannot set both _err and _err_.'),
-		('_iter', '_fg', 'Foreground commnad is not iterrable.'),
-		('_timeout', '_fg', 'Unable to count time for foreground command.'),
+		('_fg', '_out', 'Unable to set _out for foreground command.'),
+		('_fg', '_out_', 'Unable to set _out_ for foreground command.'),
+		('_fg', '_err', 'Unable to set _err for foreground command.'),
+		('_fg', '_err_', 'Unable to set _err_ for foreground command.'),
+		('_fg', '_iter', 'Foreground commnad is not iterrable.'),
+		('_fg', '_timeout', 'Unable to count time for foreground command.'),
+		('_fg', '_bg', 'Trying to iterate output which redirects to a file.'),
 		('_iter', '_pipe', 'Unable to iterate a piped command.'),
-		('_bg', '_fg', 'Trying to iterate output which redirects to a file.'),
 	)
 	piped_pool = threading.local()
 
@@ -111,7 +118,7 @@ class _Utils:
 		return ' '.join(naked_cmds), keywords, kw_args, call_args, popen_args
 
 	@staticmethod
-	def parse_kwargs(kwargs, conf, callcfg = None):
+	def parse_kwargs(kwargs, conf, checkraw = False):
 		positional0 = kwargs.pop('', [])
 		if not isinstance(positional0, (tuple, list)):
 			positional0 = [positional0]
@@ -119,8 +126,10 @@ class _Utils:
 		if not isinstance(positional1, (tuple, list)):
 			positional1 = [positional1]
 
-		ret = [quote(str(pos0)) for pos0 in positional0]
-		for key, val in kwargs.items():
+		ret    = [quote(str(pos0)) for pos0 in positional0]
+		kwkeys = kwargs.keys() if isinstance(kwargs, OrderedDict) else sorted(kwargs.keys())
+		for key in kwkeys:
+			val = kwargs[key]
 			prefix = conf['_prefix']
 			if prefix == 'auto':
 				prefix = '-' if len(key) == 1 else '--'
@@ -128,6 +137,9 @@ class _Utils:
 			sep = conf['_sep']
 			if sep == 'auto':
 				sep = ' ' if len(key) == 1 else '='
+
+			if checkraw and not conf['_raw']:
+				key = key.replace('_', '-')
 
 			if isinstance(val, bool):
 				if not val:
@@ -143,32 +155,12 @@ class _Utils:
 				else:
 					ret.extend('{prefix}{key}{sep}{v}'.format(
 						prefix = prefix, key = key,
-						sep    = sep,    v   = quote(str(val))
+						sep    = sep,    v   = quote(str(v))
 					) for v in val)
 			else:
 				ret.append('{prefix}{key}{sep}{val}'.format(prefix = prefix, key = key, sep = sep, val = quote(str(val))))
 
 		ret.extend(quote(str(pos1)) for pos1 in positional1)
-
-		callcfg = callcfg or {}
-		if callcfg.get('_out') != '>':
-			_out = callcfg.pop('_out', None)
-			if _out:
-				ret.append('>')
-				ret.append(quote(str(_out)))
-			_out_ = callcfg.pop('_out_', None)
-			if _out_:
-				ret.append('>>')
-				ret.append(quote(str(_out_)))
-		
-		_err = callcfg.pop('_err', None)
-		if _err:
-			ret.append('2>')
-			ret.append(quote(str(_err)))
-		_err_ = callcfg.pop('_err_', None)
-		if _err_:
-			ret.append('2>>')
-			ret.append(quote(str(_err_)))
 
 		return ' '.join(ret)
 
@@ -208,7 +200,7 @@ class Cmdy(object):
 			)
 			
 		exe       = call_args.get('_exe', self._exe) or self._exe
-		cmd_parts = [quote(exe), self._cmd, naked_cmd, _Utils.parse_kwargs(keywords, kw_args, call_args)]
+		cmd_parts = [quote(exe), self._cmd, naked_cmd, _Utils.parse_kwargs(keywords, kw_args, True)]
 		cmd       = ' '.join(filter(None, cmd_parts))
 		return CmdyResult(cmd, call_args, popen_args)
 
@@ -278,6 +270,7 @@ class CmdyResult(object):
 		self.iterq       = Queue()
 		self._stdout     = ''
 		self._stderr     = ''
+		self._piped      = None
 
 		okcode = self.call_args['_okcode']
 		if isinstance(okcode, int):
@@ -287,14 +280,44 @@ class CmdyResult(object):
 
 		self.call_args['_okcode'] = [oc if isinstance(oc, int) else int(oc.strip()) for oc in okcode]
 
-		self.call_args['_timeout'] = int(self.call_args['_timeout'])
+		# put the arguments in right type
+		self.call_args['_timeout'] = float(self.call_args['_timeout'])
+		for key in ('_dupkey', '_bake', '_iter', '_pipe', '_raw' , '_bg', '_fg'):
+			if not key in self.call_args or isinstance(self.call_args[key], bool):
+				continue
+			self.call_args[key] = self.call_args[key] in ('True', 'TRUE', 'T', 't', 'true', 1, '1')
 
 		if call_args['_fg']:
 			self.popen_args['stdout'] = sys.stdout
 			self.popen_args['stderr'] = sys.stderr
 		else:
-			self.popen_args['stdout'] = self.popen_args.get('stdout', subprocess.PIPE)
-			self.popen_args['stderr'] = self.popen_args.get('stderr', subprocess.PIPE)
+			_out  = call_args.get('_out')
+			_out_ = call_args.get('_out_')
+			_err  = call_args.get('_err')
+			_err_ = call_args.get('_err_')
+
+			outpipe = self.popen_args.get('stdout', subprocess.PIPE)
+			errpipe = self.popen_args.get('stderr', subprocess.PIPE)
+
+			if not _out and not _out_:
+				self.popen_args['stdout'] = outpipe
+			elif _out == '>':
+				self.popen_args['stdout'] = outpipe
+				self.call_args['_iter']   = 'out'
+			elif _out:
+				self.popen_args['stdout'] = open(_out, 'w')
+			else: #elif _out_:
+				self.popen_args['stdout'] = open(_out_, 'a')
+			
+			if not _err and not _err_:
+				self.popen_args['stderr'] = errpipe
+			elif _err == '>':
+				self.popen_args['stderr'] = errpipe
+				self.call_args['_iter']   = 'err'
+			elif _err:
+				self.popen_args['stderr'] = open(_err, 'w')
+			else: #if _err_:
+				self.popen_args['stderr'] = open(_err_, 'a')
 
 		if _Utils.get_piped():
 			self.should_run = False
@@ -303,11 +326,22 @@ class CmdyResult(object):
 			_Utils.get_piped().append(self)
 			self.should_wait = False
 
-		if call_args.get('_out') == '>':
-			self.call_args['_iter'] = True
-
 		if self.should_run:
 			self.run()
+
+	def __del__(self):
+		if self.p and self.p.stdout:
+			if hasattr(self.p.stdout, 'close') and callable(self.p.stdout.close):
+				self.p.stdout.close()
+		if self.p and self.p.stderr:
+			if hasattr(self.p.stderr, 'close') and callable(self.p.stderr.close):
+				self.p.stderr.close()
+		if self.popen_args['stdout'] and hasattr(self.popen_args['stdout'], 'close') and \
+			callable(self.popen_args['stdout'].close):
+			self.popen_args['stdout'].close()
+		if self.popen_args['stderr'] and hasattr(self.popen_args['stderr'], 'close') and \
+			callable(self.popen_args['stderr'].close):
+			self.popen_args['stderr'].close()
 
 	def __add__(self, other):
 		return str(self) + other
@@ -320,9 +354,6 @@ class CmdyResult(object):
 
 	def __ne__(self, other):
 		return not self.__eq__(other)
-
-	def long(self):
-		return long(self.strip())
 
 	def int(self):
 		return int(self.strip())
@@ -377,23 +408,33 @@ class CmdyResult(object):
 				time.sleep(.1)
 				if self.call_args['_timeout'] and time.time() - t0 > self.call_args['_timeout']:
 					self.p.terminate()
+					# to eliminate ResourceWarning from python3
+					self.p.wait()
 					raise CmdyTimeoutException(self)
 				continue
 			elif self.call_args['_timeout']:
-				while self.p.poll() is None:
+				if self.p.poll() is None:
 					time.sleep(.1)
 					if time.time() - t0 > self.call_args['_timeout']:
 						self.p.terminate()
+						# to eliminate ResourceWarning from python3
+						self.p.wait()
 						raise CmdyTimeoutException(self)
-				break
+				else:
+					break
 			else:
-				self.p.wait()
 				break
 
 		if self.call_args['_iter']:
 			self.iterq.put(None)
 
-		self.rc = self.p.returncode
+		# wait for all _piped, to eliminate ResourceWarning from python3
+		piped = self._piped
+		while piped:
+			piped.p.wait()
+			piped = piped._piped
+
+		self.rc = self.p.wait()
 		self.raise_rc()
 
 		if callable(self.call_args['_bg']):
@@ -433,7 +474,9 @@ class CmdyResult(object):
 			raise RuntimeError('Command not started to run yet.')
 		elif not self.p:
 			raise RuntimeError('Failed to open a process.')
-		elif not self.p.stdout:
+		elif self.call_args['_iter'] == 'err' and not self.p.stderr:
+			raise RuntimeError('No stderr captured, may be redirected.')
+		elif  self.call_args['_iter'] in (True, 'out') and not self.p.stdout:
 			raise RuntimeError('No stdout captured, may be redirected.')
 		elif not self.call_args['_iter']:
 			raise RuntimeError('CmdyResult is not iterrable with _iter = False.')
@@ -478,7 +521,7 @@ class CmdyResult(object):
 		elif self.call_args['_bg'] and self.p.poll() is None:
 			raise RuntimeError('Background command has not finished yet.')
 		elif not self.p.stderr:
-			raise RuntimeError('No stdout captured, may be redirected.')
+			raise RuntimeError('No stderr captured, may be redirected.')
 		elif not self._stderr:
 			self._stderr = self.p.stderr.read()
 		return self._stderr
@@ -495,20 +538,22 @@ class CmdyResult(object):
 	def __or__(self, other):
 		assert self.popen_args['stdout'] is subprocess.PIPE
 		assert self.call_args['_pipe'] is True
-		cmd = _Utils.get_piped().pop()
+		cmd = _Utils.get_piped().pop(0)
 		assert self is cmd
 		other.popen_args['stdin'] = self.p.stdout
+		other._piped = self
 		other.run()
+		#self.p.wait()
 		return other
 
 	def __gt__(self, outfile):
-		assert self.call_args.get('_out') == '>'
+		assert self.call_args.get('_out') == '>' or self.call_args.get('_err') == '>'
 		with open(outfile, 'w') as f:
 			for line in self:
 				f.write(line)
 	
 	def __rshift__(self, outfile):
-		assert self.call_args.get('_out') == '>'
+		assert self.call_args.get('_out') == '>' or self.call_args.get('_err') == '>'
 		with open(outfile, 'a') as f:
 			for line in self:
 				f.write(line)
