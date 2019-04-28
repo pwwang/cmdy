@@ -81,7 +81,7 @@ class _Utils:
 		"""
 		Get the arguments in string, keywords (unparsed kwargs), kw_args, call_args and popen_args
 		"""
-		cfg = config._use(name)
+		cfg = config._use(name, copy = True)
 		# cmdy2 = cmdy(l = True)
 		# from cmdy import ls 
 		# ls() # ls -l
@@ -164,7 +164,7 @@ class _Utils:
 
 		return ' '.join(ret)
 
-config = Config(case_sensitive = True)
+config = Config()
 config._load(dict(default = _Utils.default_config), '~/.cmdy.ini', './.cmdy.ini', 'CMDY.osenv')
 
 class Cmdy(object):

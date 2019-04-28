@@ -25,7 +25,6 @@ class TestCmdy(unittest.TestCase):
 		self.assertRaises(NameBannedFromImport, getattr, cmdy, 'os')
 
 	def testCall(self):
-		cmd = cmdy.Cmdy('ls')
 		cr  = cmdy.Cmdy('ls')(_bake = True)
 		self.assertIsInstance(cr, cmdy.Cmdy)
 		cr = cmdy.Cmdy('ls')()
@@ -113,23 +112,23 @@ bash(c = "echo stdout; echo stderr 1>&2", _fg = True)
 		testerrfile = path.join(TMPDIR, 'testRedirectErr.txt')
 		cmdy.__command_not_exist__(_okcode = 127, _err = testerrfile)
 		with open(testerrfile, 'r') as f:
-			self.assertIn('command not found', f.read().strip())
+			self.assertIn(' not found', f.read().strip())
 
 		cmdy.__command_not_exist__(_okcode = 127, _err = '>') > testerrfile
 		with open(testerrfile, 'r') as f:
-			self.assertIn('command not found', f.read().strip())
+			self.assertIn(' not found', f.read().strip())
 
 		cmdy.ls('__file_not_exits__', _okcode = 2, _err = '>') >> testerrfile
 		with open(testerrfile, 'r') as f:
 			content = f.read()
-			self.assertIn('command not found', content)
+			self.assertIn(' not found', content)
 			self.assertIn('No such file or directory', content)
 
 		cmdy.echo('command not found', _out = testerrfile)
 		cmdy.ls('__file_not_exits__', _okcode = 2, _err_ = testerrfile)
 		with open(testerrfile, 'r') as f:
 			content = f.read()
-			self.assertIn('command not found', content)
+			self.assertIn(' not found', content)
 			self.assertIn('No such file or directory', content)
 		
 	def testResultAsStr(self):
