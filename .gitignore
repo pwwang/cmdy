@@ -129,5 +129,7 @@ dmypy.json
 
 .vscode/
 
+*.bak
+
 # End of https://www.gitignore.io/api/python
 

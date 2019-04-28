@@ -25,12 +25,17 @@ class TestCmdy(unittest.TestCase):
 		self.assertRaises(NameBannedFromImport, getattr, cmdy, 'os')
 
 	def testCall(self):
-		cr  = cmdy.Cmdy('ls')(_bake = True)
-		self.assertIsInstance(cr, cmdy.Cmdy)
-		cr = cmdy.Cmdy('ls')()
+		ls_baked  = cmdy.Cmdy('ls')(_bake = True)
+		self.assertIsInstance(ls_baked, cmdy.Cmdy)
+		cr = ls_baked()
 		self.assertIsInstance(cr, cmdy.CmdyResult)
-		cr = cmdy.Cmdy('ls').bake(l = True)
+		cr = cmdy.Cmdy('ls').bake(l = True, _exe = 'list')
 		self.assertIsInstance(cr, cmdy.Cmdy)
+		c = cr(_pipe = True)
+		self.assertEqual(c.cmd, 'list -l')
+		# release pipe
+		c | cmdy.ls()
+
 	
 	def testGetattr(self):
 		git = cmdy.Cmdy('git')

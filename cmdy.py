@@ -180,7 +180,6 @@ class Cmdy(object):
 	def __call__(self, *args, **kwargs):
 		
 		naked_cmd, keywords0, kw_args0, call_args0, popen_args0 = _Utils.parse_args(self._exe, args, kwargs)
-
 		keywords   = self.keywords.copy()
 		kw_args    = self.kw_args.copy()
 		call_args  = self.call_args.copy()
@@ -192,14 +191,15 @@ class Cmdy(object):
 
 		if call_args.pop('_bake', False):
 			return self.__class__(
-				self._exe, ' '.join(filter(None, [self._cmd, naked_cmd])),
+				call_args.get('_exe', self._exe) or self._exe, 
+				' '.join(filter(None, [self._cmd, naked_cmd])),
 				keywords   = keywords,
 				kw_args    = kw_args,
 				call_args  = call_args,
 				popen_args = popen_args
 			)
-			
 		exe       = call_args.get('_exe', self._exe) or self._exe
+		self._exe = exe
 		cmd_parts = [quote(exe), self._cmd, naked_cmd, _Utils.parse_kwargs(keywords, kw_args, True)]
 		cmd       = ' '.join(filter(None, cmd_parts))
 		return CmdyResult(cmd, call_args, popen_args)
