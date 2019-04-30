@@ -195,6 +195,11 @@ class TestUtils(unittest.TestCase):
 		self.assertEqual(keywords, {'':[], '_':[], 'color': True})
 		self.assertEqual(kwargs, {'_prefix': '-', '_sep': ' ', '_raw': False, '_dupkey': False})
 
+	def testOKCodeBeingOverriden(self):
+		ls = cmdy.ls.bake(_okcode = '0~3')
+		x = ls()
+		self.assertEqual(x.call_args['_okcode'], [0,1,2,3])
+
 
 if __name__ == "__main__":
 	unittest.main(verbosity = 2)

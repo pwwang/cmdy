@@ -78,7 +78,8 @@ class _Utils:
 		return pp._piped
 
 	@staticmethod
-	def parse_args(name, args, kwargs):
+	def parse_args(name, args, kwargs, baked_keywords = None, baked_kw_args = None, 
+		baked_call_args = None, baked_popen_args = None):
 		"""
 		Get the arguments in string, keywords (unparsed kwargs), kw_args, call_args and popen_args
 		"""
@@ -87,6 +88,10 @@ class _Utils:
 		# from cmdy import ls 
 		# ls() # ls -l
 		cfg.update(_Utils.baked_args)
+		cfg.update(baked_keywords or {})
+		cfg.update(baked_kw_args or {})
+		cfg.update(baked_call_args or {})
+		cfg.update(baked_popen_args or {})
 		cfg.update(kwargs)
 
 		keywords   = {}
@@ -180,15 +185,8 @@ class Cmdy(object):
 
 	def __call__(self, *args, **kwargs):
 		
-		naked_cmd, keywords0, kw_args0, call_args0, popen_args0 = _Utils.parse_args(self._exe, args, kwargs)
-		keywords   = self.keywords.copy()
-		kw_args    = self.kw_args.copy()
-		call_args  = self.call_args.copy()
-		popen_args = self.popen_args.copy()
-		keywords.update(keywords0)
-		kw_args.update(kw_args0)
-		call_args.update(call_args0)
-		popen_args.update(popen_args0)
+		naked_cmd, keywords, kw_args, call_args, popen_args = _Utils.parse_args(
+			self._exe, args, kwargs, self.keywords, self.kw_args, self.call_args, self.popen_args)
 
 		if call_args.pop('_bake', False):
 			return self.__class__(
