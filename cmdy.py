@@ -33,11 +33,12 @@ class _Utils:
 		'_exe'     : None,
 		'_sep'     : ' ',
 		'_prefix'  : 'auto',
-		'_dry'     : False,
+		'_hold'    : False,
 		'_dupkey'  : False,
 		'_bake'    : False,
 		'_iter'    : False,
 		'_pipe'    : False,
+		'_raise'   : True,
 		'_raw'     : False,
 		'_timeout' : 0,
 		'_encoding': 'utf-8',
@@ -54,7 +55,7 @@ class _Utils:
 		'_shell', '_cwd', '_env', '_universal_newlines', '_startupinfo', '_creationflags', '_restore_signals', \
 		'_start_new_session', '_pass_fds', '_encoding', '_errors', '_text')
 	kw_arg_keys         = ('_sep', '_prefix', '_dupkey', '_raw')
-	call_arg_keys       = ('_exe', '_dry', '_okcode', '_bake', '_iter', '_pipe', '_timeout', '_bg', '_fg', '_out', '_out_', '_err', '_err_')
+	call_arg_keys       = ('_exe', '_hold', '_raise', '_okcode', '_bake', '_iter', '_pipe', '_timeout', '_bg', '_fg', '_out', '_out_', '_err', '_err_')
 	call_arg_validators = (
 		('_out', '_pipe', 'Cannot pipe a command with outfile specified.'),
 		('_out', '_out_', 'Cannot set both _out and _out_.'),
@@ -290,7 +291,7 @@ class CmdyResult(object):
 
 		# put the arguments in right type
 		self.call_args['_timeout'] = float(self.call_args['_timeout'])
-		for key in ('_dupkey', '_dry', '_bake', '_iter', '_pipe', '_raw' , '_fg'):
+		for key in ('_dupkey', '_hold', '_raise', '_bake', '_pipe', '_raw' , '_fg'):
 			if not key in self.call_args or isinstance(self.call_args[key], bool):
 				continue
 			self.call_args[key] = self.call_args[key] in ('True', 'TRUE', 'T', 't', 'true', 1, '1')
@@ -327,7 +328,7 @@ class CmdyResult(object):
 			else: #if _err_:
 				self.popen_args['stderr'] = open(_err_, 'a')
 
-		if _Utils.get_piped() or self.call_args['_dry']:
+		if _Utils.get_piped() or self.call_args['_hold']:
 			self.should_run = False
 
 		if call_args['_pipe']:
@@ -454,7 +455,7 @@ class CmdyResult(object):
 		thr.start()
 
 	def raise_rc(self):
-		if self.rc in self.call_args['_okcode']:
+		if not self.call_args['_raise'] or self.rc in self.call_args['_okcode']:
 			return
 		raise CmdyReturnCodeException(self)
 
@@ -472,7 +473,7 @@ class CmdyResult(object):
 		elif self.call_args['_fg']:
 			self.rc = self.p.wait()
 			self.raise_rc()
-		elif self.call_args['_bg']:
+		elif self.call_args['_bg'] or self.call_args['_iter']:
 			self.post_handling_bg()
 		else:
 			self.post_handling()
@@ -514,7 +515,7 @@ class CmdyResult(object):
 			raise RuntimeError('Background command has not finished yet.')
 		elif not self.p.stdout:
 			raise RuntimeError('No stdout captured, may be redirected.')
-		elif self.call_args['_iter']:
+		elif self.call_args['_iter'] in (True, 'out'):
 			return self
 		elif not self._stdout:
 			self._stdout = self.p.stdout.read()
@@ -530,6 +531,8 @@ class CmdyResult(object):
 			raise RuntimeError('Background command has not finished yet.')
 		elif not self.p.stderr:
 			raise RuntimeError('No stderr captured, may be redirected.')
+		elif self.call_args['_iter'] == 'err':
+			return self
 		elif not self._stderr:
 			self._stderr = self.p.stderr.read()
 		return self._stderr

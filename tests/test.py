@@ -43,6 +43,17 @@ class TestCmdy(unittest.TestCase):
 		self.assertIsInstance(gitshow, cmdy.Cmdy)
 		self.assertEqual(gitshow._cmd, 'show')
 
+	
+	def testOKCodeBeingOverriden(self):
+		ls = cmdy.ls.bake(_okcode = '0~3')
+		x = ls()
+		self.assertEqual(x.call_args['_okcode'], [0,1,2,3])
+
+	def testRaise(self):
+		self.assertRaises(cmdy.CmdyReturnCodeException, cmdy.bash, c = 'exit 1')
+		c = cmdy.bash(c = 'exit 1', _raise = False)
+		self.assertEqual(c.rc, 1)
+
 
 class TestCmdyResult(unittest.TestCase):
 	
@@ -194,11 +205,6 @@ class TestUtils(unittest.TestCase):
 		self.assertEqual(args, "-l 4 -a 8 -bc 'New File' 1 2")
 		self.assertEqual(keywords, {'':[], '_':[], 'color': True})
 		self.assertEqual(kwargs, {'_prefix': '-', '_sep': ' ', '_raw': False, '_dupkey': False})
-
-	def testOKCodeBeingOverriden(self):
-		ls = cmdy.ls.bake(_okcode = '0~3')
-		x = ls()
-		self.assertEqual(x.call_args['_okcode'], [0,1,2,3])
 
 
 if __name__ == "__main__":
