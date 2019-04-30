@@ -17,6 +17,9 @@ git: *.py Makefile tests/*.py
 	git commit -a -m "$(MSG)"; \
 	git push; 
 
+version: $(SRC)
+	@head -1 $< | sed 's/[^0-9.]//g'
+
 publish: $(SRC)
 	@$(eval CURRVER=$(shell head -1 $< | sed 's/[^0-9.]//g')) \
 	echo '- Current version: $(CURRVER)'; \
