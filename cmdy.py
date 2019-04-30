@@ -9,14 +9,14 @@ from collections import OrderedDict
 from simpleconf import Config
 from modkit import Modkit
 
-Modkit().ban('os', 'sys', 'time', 'quote', 'threading', 'subprocess', 'Config', 'Queue', 'QueueEmpty', 'IS_PY3')
+Modkit().ban('os', 'sys', 'time', 'threading', 'subprocess', 'Config', 'Queue', 'QueueEmpty', 'IS_PY3')
 
 try:  # py3
-	from shlex import quote
+	from shlex import quote as _shquote
 	from queue import Queue, Empty as QueueEmpty
 	IS_PY3 = True
 except ImportError:  # py2
-	from pipes import quote
+	from pipes import quote as _shquote
 	from Queue import Queue, Empty as QueueEmpty
 	IS_PY3 = False
 
@@ -33,6 +33,7 @@ class _Utils:
 		'_exe'     : None,
 		'_sep'     : ' ',
 		'_prefix'  : 'auto',
+		'_dry'     : False,
 		'_dupkey'  : False,
 		'_bake'    : False,
 		'_iter'    : False,
@@ -53,7 +54,7 @@ class _Utils:
 		'_shell', '_cwd', '_env', '_universal_newlines', '_startupinfo', '_creationflags', '_restore_signals', \
 		'_start_new_session', '_pass_fds', '_encoding', '_errors', '_text')
 	kw_arg_keys         = ('_sep', '_prefix', '_dupkey', '_raw')
-	call_arg_keys       = ('_exe', '_okcode', '_bake', '_iter', '_pipe', '_timeout', '_bg', '_fg', '_out', '_out_', '_err', '_err_')
+	call_arg_keys       = ('_exe', '_dry', '_okcode', '_bake', '_iter', '_pipe', '_timeout', '_bg', '_fg', '_out', '_out_', '_err', '_err_')
 	call_arg_validators = (
 		('_out', '_pipe', 'Cannot pipe a command with outfile specified.'),
 		('_out', '_out_', 'Cannot set both _out and _out_.'),
@@ -109,7 +110,7 @@ class _Utils:
 				kwargs.update({k:arg.pop(k) for k in _Utils.kw_arg_keys if k in arg})
 				naked_cmds.append(_Utils.parse_kwargs(arg, kwargs))
 			else:
-				naked_cmds.append(quote(str(arg)))
+				naked_cmds.append(_shquote(str(arg)))
 		
 		for arg1, arg2, msg in _Utils.call_arg_validators:
 			if call_args.get(arg1) and call_args.get(arg2):
@@ -126,7 +127,7 @@ class _Utils:
 		if not isinstance(positional1, (tuple, list)):
 			positional1 = [positional1]
 
-		ret    = [quote(str(pos0)) for pos0 in positional0]
+		ret    = [_shquote(str(pos0)) for pos0 in positional0]
 		kwkeys = kwargs.keys() if isinstance(kwargs, OrderedDict) else sorted(kwargs.keys())
 		for key in kwkeys:
 			val = kwargs[key]
@@ -150,17 +151,17 @@ class _Utils:
 				if not conf['_dupkey']:
 					ret.append('{prefix}{key}{sep}{vals}'.format(
 						prefix = prefix, key  = key,
-						sep    = sep,    vals = ' '.join(quote(str(v)) for v in val)
+						sep    = sep,    vals = ' '.join(_shquote(str(v)) for v in val)
 					))
 				else:
 					ret.extend('{prefix}{key}{sep}{v}'.format(
 						prefix = prefix, key = key,
-						sep    = sep,    v   = quote(str(v))
+						sep    = sep,    v   = _shquote(str(v))
 					) for v in val)
 			else:
-				ret.append('{prefix}{key}{sep}{val}'.format(prefix = prefix, key = key, sep = sep, val = quote(str(val))))
+				ret.append('{prefix}{key}{sep}{val}'.format(prefix = prefix, key = key, sep = sep, val = _shquote(str(val))))
 
-		ret.extend(quote(str(pos1)) for pos1 in positional1)
+		ret.extend(_shquote(str(pos1)) for pos1 in positional1)
 
 		return ' '.join(ret)
 
@@ -200,7 +201,7 @@ class Cmdy(object):
 			)
 		exe       = call_args.get('_exe', self._exe) or self._exe
 		self._exe = exe
-		cmd_parts = [quote(exe), self._cmd, naked_cmd, _Utils.parse_kwargs(keywords, kw_args, True)]
+		cmd_parts = [_shquote(exe), self._cmd, naked_cmd, _Utils.parse_kwargs(keywords, kw_args, True)]
 		cmd       = ' '.join(filter(None, cmd_parts))
 		return CmdyResult(cmd, call_args, popen_args)
 
@@ -231,8 +232,8 @@ class CmdyReturnCodeException(Exception):
 		msg += '\n'
 		msg += '  [CMD]    %s\n' % cmdy.cmd 
 		msg += '\n'
-		if cmdy.call_args['_iter']:
-			msg += '  [STDOUT] <ITERRATED>\n'
+		if cmdy.call_args['_iter'] in ('out', True) or not cmdy.p.stdout:
+			msg += '  [STDOUT] <ITERRATED / REDIRECTED>\n'
 		else:
 			outs = cmdy.stdout.splitlines()
 			msg += '  [STDOUT] %s\n' % (outs.pop().rstrip('\n') if outs else '')
@@ -240,15 +241,17 @@ class CmdyReturnCodeException(Exception):
 				msg += '           %s\n' % out.rstrip('\n')
 			if len(outs) > 32:
 				msg += '           [%s line(s) hidden.]\n' % (len(outs) - 32)
-
 		msg += '\n'
-
-		errs = cmdy.stderr.splitlines()
-		msg += '  [STDERR] %s\n' % (errs.pop().rstrip('\n') if errs else '')
-		for err in errs[:31]:
-			msg += '           %s\n' % err.rstrip()
-		if len(errs) > 32:
-			msg += '           [%s line(s) hidden.]\n' % (len(errs) - 32)
+		
+		if cmdy.call_args['_iter'] == 'err' or not cmdy.p.stderr:
+			msg += '  [STDERR] <ITERRATED / REDIRECTED>\n'
+		else:
+			errs = cmdy.stderr.splitlines()
+			msg += '  [STDERR] %s\n' % (errs.pop().rstrip('\n') if errs else '')
+			for err in errs[:31]:
+				msg += '           %s\n' % err.rstrip()
+			if len(errs) > 32:
+				msg += '           [%s line(s) hidden.]\n' % (len(errs) - 32)
 		msg += '\n'
 		super(CmdyReturnCodeException, self).__init__(msg)
 
@@ -276,13 +279,20 @@ class CmdyResult(object):
 		if isinstance(okcode, int):
 			okcode = [okcode]
 		elif not isinstance(okcode, list):
-			okcode = okcode.split(',')
+			okcode_items = okcode.split(',')
+			okcode = []
+			for oc in okcode_items:
+				if '~' in oc:
+					start, end = oc.strip().split('~', 1)
+					okcode.extend(range(int(start), int(end) + 1))
+				else:
+					okcode.append(oc)
 
 		self.call_args['_okcode'] = [oc if isinstance(oc, int) else int(oc.strip()) for oc in okcode]
 
 		# put the arguments in right type
 		self.call_args['_timeout'] = float(self.call_args['_timeout'])
-		for key in ('_dupkey', '_bake', '_iter', '_pipe', '_raw' , '_bg', '_fg'):
+		for key in ('_dupkey', '_dry', '_bake', '_iter', '_pipe', '_raw' , '_fg'):
 			if not key in self.call_args or isinstance(self.call_args[key], bool):
 				continue
 			self.call_args[key] = self.call_args[key] in ('True', 'TRUE', 'T', 't', 'true', 1, '1')
@@ -319,7 +329,7 @@ class CmdyResult(object):
 			else: #if _err_:
 				self.popen_args['stderr'] = open(_err_, 'a')
 
-		if _Utils.get_piped():
+		if _Utils.get_piped() or self.call_args['_dry']:
 			self.should_run = False
 
 		if call_args['_pipe']:
