@@ -1,4 +1,4 @@
-VERSION = '0.1.1'
+VERSION = '0.0.10'
 
 import os
 import sys
@@ -79,14 +79,14 @@ class _Utils:
 		return pp._piped
 
 	@staticmethod
-	def parse_args(name, args, kwargs, baked_keywords = None, baked_kw_args = None, 
+	def parse_args(name, args, kwargs, baked_keywords = None, baked_kw_args = None,
 		baked_call_args = None, baked_popen_args = None):
 		"""
 		Get the arguments in string, keywords (unparsed kwargs), kw_args, call_args and popen_args
 		"""
 		cfg = config._use(name, copy = True)
 		# cmdy2 = cmdy(l = True)
-		# from cmdy import ls 
+		# from cmdy import ls
 		# ls() # ls -l
 		cfg.update(_Utils.baked_args)
 		cfg.update(baked_keywords or {})
@@ -108,7 +108,7 @@ class _Utils:
 				popen_args[key] = val
 			else:
 				keywords[key] = val
-		
+
 		naked_cmds = []
 		for arg in args:
 			if isinstance(arg, dict):
@@ -117,7 +117,7 @@ class _Utils:
 				naked_cmds.append(_Utils.parse_kwargs(arg, kwargs))
 			else:
 				naked_cmds.append(_shquote(str(arg)))
-		
+
 		for arg1, arg2, msg in _Utils.call_arg_validators:
 			if call_args.get(arg1) and call_args.get(arg2):
 				raise ValueError(msg)
@@ -140,7 +140,7 @@ class _Utils:
 			prefix = conf['_prefix']
 			if prefix == 'auto':
 				prefix = '-' if len(key) == 1 else '--'
-			
+
 			sep = conf['_sep']
 			if sep == 'auto':
 				sep = ' ' if len(key) == 1 else '='
@@ -171,6 +171,54 @@ class _Utils:
 
 		return ' '.join(ret)
 
+class _Valuable(object):
+
+	def __str__(self):
+		return str(self.value)
+
+	def str(self):
+		return str(self.value)
+
+	def int(self, raise_exc = True):
+		try:
+			return int(self.value)
+		except Exception:
+			if raise_exc:
+				raise
+			return None
+
+	def float(self, raise_exc = True):
+		try:
+			return float(self.value)
+		except Exception:
+			if raise_exc:
+				raise
+			return None
+
+	def __bool__(self):
+		return bool(self.value)
+
+	def __add__(self, other):
+		try:
+			return self.value + other
+		except TypeError:
+			return str(self.value) + other
+
+	def __contains__(self, other):
+		try:
+			return other in self.value
+		except TypeError:
+			return other in str(self.value)
+
+	def __eq__(self, other):
+		try:
+			return self.value == other
+		except TypeError:
+			return str(self.value) == other
+
+	def __ne__(self, other):
+		return not self.__eq__(other)
+
 config = Config()
 config._load(dict(default = _Utils.default_config), '~/.cmdy.ini', './.cmdy.ini', 'CMDY.osenv')
 
@@ -185,13 +233,13 @@ class Cmdy(object):
 		self.popen_args = popen_args or {}
 
 	def __call__(self, *args, **kwargs):
-		
+
 		naked_cmd, keywords, kw_args, call_args, popen_args = _Utils.parse_args(
 			self._exe, args, kwargs, self.keywords, self.kw_args, self.call_args, self.popen_args)
 
 		if call_args.pop('_bake', False):
 			return self.__class__(
-				call_args.get('_exe', self._exe) or self._exe, 
+				call_args.get('_exe', self._exe) or self._exe,
 				' '.join(filter(None, [self._cmd, naked_cmd])),
 				keywords   = keywords,
 				kw_args    = kw_args,
@@ -226,10 +274,10 @@ class CmdyReturnCodeException(Exception):
 	def __init__(self, cmdy):
 		self.cmdy = cmdy
 		msg  = 'Unexpected RETURN CODE %s, expecting: %s\n' % (cmdy.rc, cmdy.call_args['_okcode'])
-		msg += '\n' 
+		msg += '\n'
 		msg += '  [PID]    %s\n' % (cmdy.pid if cmdy.pid and cmdy.rc != -1 else 'Not launched.')
 		msg += '\n'
-		msg += '  [CMD]    %s\n' % cmdy.cmd 
+		msg += '  [CMD]    %s\n' % cmdy.cmd
 		msg += '\n'
 		if cmdy.call_args['_iter'] in ('out', True) or not cmdy.p.stdout:
 			msg += '  [STDOUT] <ITERRATED / REDIRECTED>\n'
@@ -241,7 +289,7 @@ class CmdyReturnCodeException(Exception):
 			if len(outs) > 32:
 				msg += '           [%s line(s) hidden.]\n' % (len(outs) - 32)
 		msg += '\n'
-		
+
 		if cmdy.call_args['_iter'] == 'err' or not cmdy.p.stderr:
 			msg += '  [STDERR] <ITERRATED / REDIRECTED>\n'
 		else:
@@ -254,13 +302,13 @@ class CmdyReturnCodeException(Exception):
 		msg += '\n'
 		super(CmdyReturnCodeException, self).__init__(msg)
 
-class CmdyResult(object):
+class CmdyResult(_Valuable):
 
 	def __init__(self, cmd, call_args, popen_args):
 		self.done        = False
 		self.p           = None
 		self.popen_args  = {
-			key[1:]:val for key, val in popen_args.items() 
+			key[1:]:val for key, val in popen_args.items()
 			if IS_PY3 or key not in ('_restore_signals', '_start_new_session', '_pass_fds', '_encoding', '_errors', '_text')
 		}
 		self.call_args   = call_args
@@ -317,7 +365,7 @@ class CmdyResult(object):
 				self.popen_args['stdout'] = open(_out, 'w')
 			else: #elif _out_:
 				self.popen_args['stdout'] = open(_out_, 'a')
-			
+
 			if not _err and not _err_:
 				self.popen_args['stderr'] = errpipe
 			elif _err == '>':
@@ -352,24 +400,6 @@ class CmdyResult(object):
 			callable(self.popen_args['stderr'].close):
 			self.popen_args['stderr'].close()
 
-	def __add__(self, other):
-		return str(self) + other
-
-	def __contains__(self, other):
-		return other in str(self)
-
-	def __eq__(self, other):
-		return str(self) == other
-
-	def __ne__(self, other):
-		return not self.__eq__(other)
-
-	def int(self):
-		return int(self.strip())
-
-	def float(self):
-		return float(self.strip())
-	
 	def __getattr__(self, name):
 		# attach str methods
 		if name in ('capitalize', 'center', 'count', 'decode', 'encode', 'endswith', 'expandtabs', \
@@ -388,7 +418,7 @@ class CmdyResult(object):
 		self.rc          = 0
 		self._stdout     = ''
 		self._stderr     = ''
-		
+
 	def run(self):
 		if self.done:
 			return
@@ -477,7 +507,7 @@ class CmdyResult(object):
 			self.post_handling_bg()
 		else:
 			self.post_handling()
-		
+
 	def next(self):
 		if not self.done:
 			raise RuntimeError('Command not started to run yet.')
@@ -489,7 +519,7 @@ class CmdyResult(object):
 			raise RuntimeError('No stdout captured, may be redirected.')
 		elif not self.call_args['_iter']:
 			raise RuntimeError('CmdyResult is not iterrable with _iter = False.')
-		
+
 		try:
 			item = self.iterq.get()
 		except QueueEmpty:
@@ -536,8 +566,9 @@ class CmdyResult(object):
 		elif not self._stderr:
 			self._stderr = self.p.stderr.read()
 		return self._stderr
-		
-	def __str__(self):
+
+	@property
+	def value(self):
 		return self.stdout
 
 	def __repr__(self):
@@ -562,7 +593,7 @@ class CmdyResult(object):
 		with open(outfile, 'w') as f:
 			for line in self:
 				f.write(line)
-	
+
 	def __rshift__(self, outfile):
 		assert self.call_args.get('_out') == '>' or self.call_args.get('_err') == '>'
 		with open(outfile, 'a') as f:
@@ -573,6 +604,7 @@ def _modkit_delegate(exe):
 	return Cmdy(exe)
 
 def _modkit_call(module, **kwargs):
+	# every bake from the begining
+	module._Utils.baked_args = {}
 	module._Utils.baked_args.update(kwargs)
 	return module
-

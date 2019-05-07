@@ -36,14 +36,14 @@ class TestCmdy(unittest.TestCase):
 		# release pipe
 		c | cmdy.ls()
 
-	
+
 	def testGetattr(self):
 		git = cmdy.Cmdy('git')
 		gitshow = git.show
 		self.assertIsInstance(gitshow, cmdy.Cmdy)
 		self.assertEqual(gitshow._cmd, 'show')
 
-	
+
 	def testOKCodeBeingOverriden(self):
 		ls = cmdy.ls.bake(_okcode = '0~3')
 		x = ls()
@@ -56,7 +56,7 @@ class TestCmdy(unittest.TestCase):
 
 
 class TestCmdyResult(unittest.TestCase):
-	
+
 	def test(self):
 		lsresult = cmdy.ls(__DIR__)
 		self.assertIsInstance(lsresult, cmdy.CmdyResult)
@@ -102,7 +102,7 @@ bash(c = "echo stdout; echo stderr 1>&2", _fg = True)
 	def testPipe(self):
 		ret = cmdy.bash(c = 'echo -e "1\t2\t3\n4\t5\t6"', _pipe = True) | cmdy.cut(f = 2)
 		self.assertEqual(ret.strip(), "2\n5")
-		
+
 		# pipe chain
 		ret = (cmdy.bash(c = 'echo -e "1\t2\t3\n4\t5\t6"', _pipe = True) | cmdy.cut(f = 2, _pipe = True)) | cmdy.tail(n = 1)
 		self.assertEqual(ret.strip(), "5")
@@ -120,7 +120,7 @@ bash(c = "echo stdout; echo stderr 1>&2", _fg = True)
 		cmdy.echo("456", _out = '>') >> testoutfile
 		with open(testoutfile, 'r') as f:
 			self.assertEqual(f.read().strip(), '123\n456')
-		
+
 		cmdy.echo("456", _out_ = testoutfile)
 		with open(testoutfile, 'r') as f:
 			self.assertEqual(f.read().strip(), '123\n456\n456')
@@ -146,7 +146,7 @@ bash(c = "echo stdout; echo stderr 1>&2", _fg = True)
 			content = f.read()
 			self.assertIn(' not found', content)
 			self.assertIn('No such file or directory', content)
-		
+
 	def testResultAsStr(self):
 		a = cmdy.echo('123')
 		self.assertEqual(a + '456', '123\n456')
@@ -155,20 +155,20 @@ bash(c = "echo stdout; echo stderr 1>&2", _fg = True)
 		self.assertTrue(a != '')
 		self.assertEqual(a.int(), 123)
 		self.assertEqual(a.float(), 123.0)
-	
+
 class TestUtils(unittest.TestCase):
-	
+
 	def testGetPiped(self):
 		pp = cmdy._Utils.get_piped()
 		self.assertEqual(pp, [])
 		pp.append(1)
 		pp = cmdy._Utils.get_piped()
 		self.assertEqual(pp, [1])
-	
+
 	def testParseKwargsEmpty(self):
 		kw = cmdy._Utils.parse_kwargs({}, {})
 		self.assertEqual(kw, '')
-	
+
 	def testParseKwargsPositional(self):
 		kw = cmdy._Utils.parse_kwargs({'_': 1, '': 2}, {})
 		self.assertEqual(kw, '2 1')
