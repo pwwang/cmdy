@@ -20,9 +20,10 @@ except ImportError:  # py2
 	from Queue import Queue, Empty as QueueEmpty
 	IS_PY3 = False
 
-DEVERR  = '/dev/stderr'
-DEVOUT  = '/dev/stdout'
-DEVNULL = '/dev/null'
+DEVERR     = '/dev/stderr'
+DEVOUT     = '/dev/stdout'
+DEVNULL    = '/dev/null'
+BAKED_ARGS = {}
 
 class _Utils:
 
@@ -88,7 +89,7 @@ class _Utils:
 		# cmdy2 = cmdy(l = True)
 		# from cmdy import ls
 		# ls() # ls -l
-		cfg.update(_Utils.baked_args)
+		cfg.update(BAKED_ARGS)
 		cfg.update(baked_keywords or {})
 		cfg.update(baked_kw_args or {})
 		cfg.update(baked_call_args or {})
@@ -173,6 +174,13 @@ class _Utils:
 
 class _Valuable(object):
 
+	STR_METHODS = ('capitalize', 'center', 'count', 'decode', 'encode', 'endswith', \
+		'expandtabs', 'find', 'format', 'index', 'isalnum', 'isalpha', 'isdigit', \
+		'islower', 'isspace', 'istitle', 'isupper', 'join', 'ljust', 'lower', 'lstrip', \
+		'partition', 'replace', 'rfind', 'rindex', 'rjust', 'rpartition', 'rsplit', \
+		'rstrip', 'split', 'splitlines', 'startswith', 'strip', 'swapcase', 'title', \
+		'translate', 'upper', 'zfill')
+
 	def __str__(self):
 		return str(self.value)
 
@@ -194,6 +202,12 @@ class _Valuable(object):
 			if raise_exc:
 				raise
 			return None
+
+	def __getattr__(self, item):
+		# attach str methods
+		if item in _Valuable.STR_METHODS:
+			return getattr(str(self.value), item)
+		raise AttributeError('No such attribute: {}'.format(item))
 
 	def __bool__(self):
 		return bool(self.value)
@@ -400,16 +414,6 @@ class CmdyResult(_Valuable):
 			callable(self.popen_args['stderr'].close):
 			self.popen_args['stderr'].close()
 
-	def __getattr__(self, name):
-		# attach str methods
-		if name in ('capitalize', 'center', 'count', 'decode', 'encode', 'endswith', 'expandtabs', \
-			'find', 'format', 'index', 'isalnum', 'isalpha', 'isdigit', 'islower', 'isspace', \
-			'istitle', 'isupper', 'join', 'ljust', 'lower', 'lstrip', 'partition', 'replace', \
-			'rfind', 'rindex', 'rjust', 'rpartition', 'rsplit', 'rstrip', 'split', 'splitlines', \
-			'startswith', 'strip', 'swapcase', 'title', 'translate', 'upper', 'zfill'):
-			return getattr(str(self), name)
-		raise AttributeError('No such attribute "%s" for CmdyResult.' % name)
-
 	def reset(self):
 		self.done        = False
 		self.p           = None
@@ -603,8 +607,7 @@ class CmdyResult(_Valuable):
 def _modkit_delegate(exe):
 	return Cmdy(exe)
 
-def _modkit_call(module, **kwargs):
+def _modkit_call(oldmod, newmod, **kwargs):
 	# every bake from the begining
-	module._Utils.baked_args = {}
-	module._Utils.baked_args.update(kwargs)
-	return module
+	newmod.BAKED_ARGS = oldmod.BAKED_ARGS.copy()
+	newmod.BAKED_ARGS.update(kwargs)
