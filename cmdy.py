@@ -9,7 +9,6 @@ from collections import OrderedDict
 from simpleconf import Config
 from modkit import Modkit
 
-Modkit().ban('os', 'sys', 'time', 'threading', 'subprocess', 'Config', 'Queue', 'QueueEmpty', 'IS_PY3')
 
 try:  # py3
 	from shlex import quote as _shquote
@@ -51,7 +50,6 @@ class _Utils:
 		'_err_'    : None
 	}
 
-	baked_args     = {}
 	popen_arg_keys = ('_bufsize', '_executable', '_stdin', '_stdout', '_stderr', '_preexec_fn', '_close_fds', \
 		'_shell', '_cwd', '_env', '_universal_newlines', '_startupinfo', '_creationflags', '_restore_signals', \
 		'_start_new_session', '_pass_fds', '_encoding', '_errors', '_text')
@@ -401,6 +399,8 @@ class CmdyResult(_Valuable):
 			self.run()
 
 	def __del__(self):
+		if self.call_args['_fg']: # don't close sys.stdout and sys.stderr
+			return
 		if self.p and self.p.stdout:
 			if hasattr(self.p.stdout, 'close') and callable(self.p.stdout.close):
 				self.p.stdout.close()
@@ -573,7 +573,7 @@ class CmdyResult(_Valuable):
 
 	@property
 	def value(self):
-		return self.stdout
+		return self.stdout if self.done else self.cmd
 
 	def __repr__(self):
 		return str(self)
@@ -608,6 +608,8 @@ def _modkit_delegate(exe):
 	return Cmdy(exe)
 
 def _modkit_call(oldmod, newmod, **kwargs):
-	# every bake from the begining
-	newmod.BAKED_ARGS = oldmod.BAKED_ARGS.copy()
+	newmod.BAKED_ARGS.update(oldmod.BAKED_ARGS)
 	newmod.BAKED_ARGS.update(kwargs)
+
+Modkit().ban(
+	'os', 'sys', 'time', 'threading', 'subprocess', 'Config', 'Queue', 'QueueEmpty', 'IS_PY3')
