@@ -608,6 +608,8 @@ def _modkit_delegate(exe):
 	return Cmdy(exe)
 
 def _modkit_call(oldmod, newmod, **kwargs):
+	newmod.config.update(oldmod.config)
+	newmod.config._protected['cached'].update(oldmod.config._protected['cached'])
 	newmod.BAKED_ARGS.update(oldmod.BAKED_ARGS)
 	newmod.BAKED_ARGS.update(kwargs)
 
