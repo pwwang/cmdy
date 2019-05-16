@@ -399,20 +399,22 @@ class CmdyResult(_Valuable):
 			self.run()
 
 	def __del__(self):
-		if self.call_args['_fg']: # don't close sys.stdout and sys.stderr
-			return
-		if self.p and self.p.stdout:
-			if hasattr(self.p.stdout, 'close') and callable(self.p.stdout.close):
-				self.p.stdout.close()
-		if self.p and self.p.stderr:
-			if hasattr(self.p.stderr, 'close') and callable(self.p.stderr.close):
-				self.p.stderr.close()
-		if self.popen_args['stdout'] and hasattr(self.popen_args['stdout'], 'close') and \
-			callable(self.popen_args['stdout'].close):
-			self.popen_args['stdout'].close()
-		if self.popen_args['stderr'] and hasattr(self.popen_args['stderr'], 'close') and \
-			callable(self.popen_args['stderr'].close):
-			self.popen_args['stderr'].close()
+		#if self.call_args['_fg']: # don't close sys.stdout and sys.stderr
+		#	return
+		if not self.popen_args['stdout'] is sys.stdout:
+			if self.p and self.p.stdout:
+				if hasattr(self.p.stdout, 'close') and callable(self.p.stdout.close):
+					self.p.stdout.close()
+			if self.popen_args['stdout'] and hasattr(self.popen_args['stdout'], 'close') and \
+				callable(self.popen_args['stdout'].close):
+				self.popen_args['stdout'].close()
+		if not self.popen_args['stderr'] is sys.stderr:
+			if self.p and self.p.stderr:
+				if hasattr(self.p.stderr, 'close') and callable(self.p.stderr.close):
+					self.p.stderr.close()
+			if self.popen_args['stderr'] and hasattr(self.popen_args['stderr'], 'close') and \
+				callable(self.popen_args['stderr'].close):
+				self.popen_args['stderr'].close()
 
 	def reset(self):
 		self.done        = False
