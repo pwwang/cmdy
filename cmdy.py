@@ -5,6 +5,7 @@ import sys
 import time
 import threading
 import subprocess
+from datetime import datetime
 from collections import OrderedDict
 from simpleconf import Config
 from modkit import Modkit
@@ -34,6 +35,7 @@ class _Utils:
 		'_sep'     : ' ',
 		'_prefix'  : 'auto',
 		'_hold'    : False,
+		'_report'  : False,
 		'_dupkey'  : False,
 		'_bake'    : False,
 		'_iter'    : False,
@@ -54,7 +56,7 @@ class _Utils:
 		'_shell', '_cwd', '_env', '_universal_newlines', '_startupinfo', '_creationflags', '_restore_signals', \
 		'_start_new_session', '_pass_fds', '_encoding', '_errors', '_text')
 	kw_arg_keys         = ('_sep', '_prefix', '_dupkey', '_raw')
-	call_arg_keys       = ('_exe', '_hold', '_raise', '_okcode', '_bake', '_iter', '_pipe', '_timeout', '_bg', '_fg', '_out', '_out_', '_err', '_err_')
+	call_arg_keys       = ('_exe', '_hold', '_report', '_raise', '_okcode', '_bake', '_iter', '_pipe', '_timeout', '_bg', '_fg', '_out', '_out_', '_err', '_err_')
 	call_arg_validators = (
 		('_out', '_pipe', 'Cannot pipe a command with outfile specified.'),
 		('_out', '_out_', 'Cannot set both _out and _out_.'),
@@ -347,7 +349,7 @@ class CmdyResult(_Valuable):
 
 		# put the arguments in right type
 		self.call_args['_timeout'] = float(self.call_args['_timeout'])
-		for key in ('_dupkey', '_hold', '_raise', '_bake', '_pipe', '_raw' , '_fg'):
+		for key in ('_dupkey', '_hold', '_report', '_raise', '_bake', '_pipe', '_raw' , '_fg'):
 			if not key in self.call_args or isinstance(self.call_args[key], bool):
 				continue
 			self.call_args[key] = self.call_args[key] in ('True', 'TRUE', 'T', 't', 'true', 1, '1')
@@ -426,6 +428,15 @@ class CmdyResult(_Valuable):
 			return
 
 		self.done = True
+		if self.call_args['_report']:
+			try:
+				self.popen_args['stderr'].write("[{}][{}] {}\n".format(
+					datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+					__name__,
+					self.cmd
+				))
+			except (AttributeError, KeyError):
+				pass
 		self.p    = subprocess.Popen(self.cmd, shell = True, **self.popen_args)
 		self.pid  = self.p.pid
 		if self.should_wait:
