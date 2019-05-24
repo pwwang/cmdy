@@ -97,6 +97,13 @@ class _Utils:
 		call_args  = {}
 		popen_args = {}
 		for key, val in cfg.items():
+			# if the package is used in R reticulate
+			# use .hold instead of _hold
+			if key and key[0] == '.':
+				right_key = '_' + key[1:]
+				cfg[right_key] = cfg.pop(key)
+				key = right_key
+
 			if key in _Utils.kw_arg_keys:
 				kw_args[key] = val
 			elif key in _Utils.call_arg_keys:
@@ -285,9 +292,13 @@ class CmdyReturnCodeException(Exception):
 		self.cmdy = cmdy
 		msg  = 'Unexpected RETURN CODE %s, expecting: %s\n' % (cmdy.rc, cmdy.call_args['_okcode'])
 		msg += '\n'
-		msg += '  [PID]    %s\n' % (cmdy.pid if cmdy.pid and cmdy.rc != -1 else 'Not launched.')
+		msg += '  [PID] %s\n' % (cmdy.pid if cmdy.pid and cmdy.rc != -1 else 'Not launched.')
 		msg += '\n'
-		msg += '  [CMD]    %s\n' % cmdy.cmd
+		msg += '  [CMD] %s\n' % cmdy.cmd
+		msg += '\n'
+		msg += '  [CALL_ARGS] %s\n' % cmdy.call_args
+		msg += '\n'
+		msg += '  [POPEN_ARGS] %s\n' % cmdy.popen_args
 		msg += '\n'
 		if cmdy.call_args['_iter'] in ('out', True) or not cmdy.p.stdout:
 			msg += '  [STDOUT] <ITERRATED / REDIRECTED>\n'
@@ -393,8 +404,20 @@ class CmdyResult(_Valuable):
 			_Utils.get_piped().append(self)
 			self.should_wait = False
 
+		self._fix_popen_env()
+
 		if self.should_run:
 			self.run()
+
+	def _fix_popen_env(self):
+		if 'env' not in self.popen_args or not self.popen_args['env']:
+			return
+		update = self.popen_args['env'].pop('_update', True)
+		if not update:
+			return
+		env = os.environ.copy()
+		env.update({key: str(val) for key, val in self.popen_args['env'].items()})
+		self.popen_args['env'] = env
 
 	def __del__(self):
 		#if self.call_args['_fg']: # don't close sys.stdout and sys.stderr
