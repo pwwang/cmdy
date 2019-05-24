@@ -644,6 +644,7 @@ def _modkit_call(oldmod, newmod, **kwargs):
 	newmod.config._protected['cached'].update(oldmod.config._protected['cached'])
 	newmod.BAKED_ARGS.update(oldmod.BAKED_ARGS)
 	newmod.BAKED_ARGS.update(kwargs)
+	newmod._Utils.piped_pool = oldmod._Utils.piped_pool
 
 Modkit().ban(
 	'os', 'sys', 'time', 'threading', 'subprocess', 'Config', 'Queue', 'QueueEmpty', 'IS_PY3')
