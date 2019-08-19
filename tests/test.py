@@ -19,6 +19,12 @@ load_default_config()
 
 class TestCmdy(unittest.TestCase):
 
+	def testEnv(self):
+		from os import environ
+		environ['VAR1'] = 'var1'
+		self.assertEqual(cmdy.bash(c = 'echo $VAR2', _env = {'VAR2': 'var2'}).strip(), 'var2')
+		self.assertEqual(cmdy.bash(c = 'echo $VAR1', _env = {'VAR2': 'var2'}).strip(), 'var1')
+
 	def testModule(self):
 		from cmdy import ls
 		self.assertIsInstance(ls, cmdy.Cmdy)
