@@ -13,7 +13,7 @@ homepage = "https://github.com/pwwang/cmdy"
 repository = "https://github.com/pwwang/cmdy"
 
 [tool.poetry.dependencies]
-python = "~2.7 | ^3.3"
+python = "^3.6"
 modkit = "*"
 python-simpleconf = "*"
 

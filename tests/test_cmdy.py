@@ -1,6 +1,4 @@
 from __future__ import print_function
-import io
-import sys
 import pytest
 from os import path
 import cmdy
