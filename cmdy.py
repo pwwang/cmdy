@@ -1,4 +1,4 @@
-VERSION = '0.1.9'
+__version__ = "0.1.10"
 
 import os
 import sys
@@ -214,8 +214,6 @@ class _Valuable(object):
 			return getattr(str(self.value), item)
 		raise AttributeError('No such attribute: {}'.format(item))
 
-	def __bool__(self):
-		return bool(self.value)
 
 	def __add__(self, other):
 		try:
@@ -232,7 +230,7 @@ class _Valuable(object):
 	def __eq__(self, other):
 		try:
 			return self.value == other
-		except TypeError:
+		except TypeError: # pragma: no cover
 			return str(self.value) == other
 
 	def __ne__(self, other):
@@ -252,7 +250,6 @@ class Cmdy(object):
 		self.popen_args = popen_args or {}
 
 	def __call__(self, *args, **kwargs):
-
 		naked_cmd, keywords, kw_args, call_args, popen_args = _Utils.parse_args(
 			self._exe, args, kwargs, self.keywords, self.kw_args, self.call_args, self.popen_args)
 
@@ -302,7 +299,7 @@ class CmdyReturnCodeException(Exception):
 		msg += '\n'
 		msg += '  [POPEN_ARGS] %s\n' % cmdy.popen_args
 		msg += '\n'
-		if cmdy.call_args['_iter'] in ('out', True) or not cmdy.p.stdout:
+		if cmdy.call_args['_iter'] in ('out', True) or not cmdy.p or not cmdy.p.stdout:
 			msg += '  [STDOUT] <ITERRATED / REDIRECTED>\n'
 		else:
 			outs = cmdy.stdout.splitlines()
@@ -313,7 +310,7 @@ class CmdyReturnCodeException(Exception):
 				msg += '           [%s line(s) hidden.]\n' % (len(outs) - 32)
 		msg += '\n'
 
-		if cmdy.call_args['_iter'] == 'err' or not cmdy.p.stderr:
+		if cmdy.call_args['_iter'] == 'err' or not cmdy.p or not cmdy.p.stderr:
 			msg += '  [STDERR] <ITERRATED / REDIRECTED>\n'
 		else:
 			errs = cmdy.stderr.splitlines()
@@ -405,6 +402,7 @@ class CmdyResult(_Valuable):
 		if call_args['_pipe']:
 			_Utils.get_piped().append(self)
 			self.should_wait = False
+			self.should_run = False
 
 		self._fix_popen_env()
 
@@ -453,6 +451,9 @@ class CmdyResult(_Valuable):
 			return
 
 		self.done = True
+		if self._piped is not None:
+			self._piped.run()
+			self.popen_args['stdin'] = self._piped.p.stdout
 		if self.call_args['_report']:
 			try:
 				self.popen_args['stderr'].write("[{}][{}] {}\n".format(
@@ -460,7 +461,7 @@ class CmdyResult(_Valuable):
 					__name__,
 					self.cmd
 				))
-			except (AttributeError, KeyError):
+			except (AttributeError, KeyError): # pragma: no cover
 				pass
 		self.p    = subprocess.Popen(self.cmd, shell = True, **self.popen_args)
 		self.pid  = self.p.pid
@@ -475,9 +476,10 @@ class CmdyResult(_Valuable):
 		while True:
 			# _iter, _bg, _timeout
 			if self.call_args['_iter']:
-				line = (self.p.stdout, self.p.stderr)[
+				linefd = (self.p.stdout, self.p.stderr)[
 					int(self.call_args['_iter'] == 'err')
-				].readline()
+				]
+				line = linefd.readline() if linefd else None
 				if line:
 					self.iterq.put(line)
 				elif self.p.poll() is not None:
@@ -487,8 +489,8 @@ class CmdyResult(_Valuable):
 					self.p.terminate()
 					# to eliminate ResourceWarning from python3
 					self.p.wait()
+					self.iterq.put(None)
 					raise CmdyTimeoutException(self)
-				continue
 			elif self.call_args['_timeout']:
 				if self.p.poll() is None:
 					time.sleep(.1)
@@ -507,8 +509,9 @@ class CmdyResult(_Valuable):
 
 		# wait for all _piped, to eliminate ResourceWarning from python3
 		piped = self._piped
-		while piped:
-			piped.p.wait()
+		while piped is not None:
+			piped.rc = piped.p.wait()
+			piped.raise_rc()
 			piped = piped._piped
 
 		self.rc = self.p.wait()
@@ -560,7 +563,7 @@ class CmdyResult(_Valuable):
 
 		try:
 			item = self.iterq.get()
-		except QueueEmpty:
+		except QueueEmpty: # pragma: no cover
 			return None
 		if item is None:
 			raise StopIteration()
@@ -620,11 +623,18 @@ class CmdyResult(_Valuable):
 		assert self.call_args['_pipe'] is True
 		cmd = _Utils.get_piped().pop(0)
 		assert self is cmd
-		other.popen_args['stdin'] = self.p.stdout
+		#other.popen_args['stdin'] = self.p.stdout
 		other._piped = self
-		other.run()
+		if not other.call_args['_hold']:
+			other.run()
 		#self.p.wait()
 		return other
+
+	@property
+	def pipedcmd(self):
+		if self._piped is None:
+			return self.cmd
+		return self._piped.cmd + ' | ' + self.cmd
 
 	def __gt__(self, outfile):
 		assert self.call_args.get('_out') == '>' or self.call_args.get('_err') == '>'
