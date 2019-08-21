@@ -12,13 +12,15 @@ from modkit import Modkit
 
 
 try:  # py3
-	from shlex import quote as _shquote
+	from shlex import quote as _quote
 	from queue import Queue, Empty as QueueEmpty
 	IS_PY3 = True
 except ImportError:  # py2
-	from pipes import quote as _shquote
+	from pipes import quote as _quote
 	from Queue import Queue, Empty as QueueEmpty
 	IS_PY3 = False
+
+_shquote = lambda s: _quote(str(s))
 
 DEVERR     = '/dev/stderr'
 DEVOUT     = '/dev/stdout'
