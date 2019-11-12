@@ -2,6 +2,7 @@ from __future__ import print_function
 import pytest
 from os import path
 import cmdy
+import logging
 import time
 from tempfile import gettempdir
 from collections import OrderedDict
@@ -40,9 +41,11 @@ class TestCmdy(object):
 		cmd.run()
 		assert cmd.strip() == '1var2'
 
-	def testReport(self, capfd):
-		cmdy.bash(c = 'echo 1', _report = True, _fg = True)
-		assert "[cmdy] bash -c 'echo 1'" in capfd.readouterr().err
+	def testDebug(self, caplog):
+		with caplog.at_level(logging.DEBUG, logger="cmdy"):
+			cmdy.bash(c = 'echo 1', _debug = True)
+		# [cmdy] Running: bash -c 'echo 1'
+		assert "Running: bash -c 'echo 1'" in caplog.text
 
 	def testModule(self):
 		from cmdy import ls
@@ -286,7 +289,7 @@ bash(c = "echo stdout; echo stderr 1>&2", _fg = True)
 		for line in c:
 			print(line, end = '')
 
-	
+
 	def testStdoutExc(self):
 		c = cmdy.bash(c = 'echo 1', _hold = True)
 		with pytest.raises(RuntimeError): # Command not started to run yet.
@@ -302,14 +305,14 @@ bash(c = "echo stdout; echo stderr 1>&2", _fg = True)
 		# Background command has not finished yet.
 		with pytest.raises(RuntimeError):
 			cmdy.sleep(.5, _bg = True).stdout
-		
+
 		# stdout REDIRECTED
 		c = cmdy.echo(123)
 		c.p.stdout = None
 		with pytest.raises(RuntimeError):
 			c.stdout
 
-	
+
 	def testStderrExc(self):
 		c = cmdy.bash(c = 'echo 1', _hold = True)
 		with pytest.raises(RuntimeError): # Command not started to run yet.
@@ -326,7 +329,7 @@ bash(c = "echo stdout; echo stderr 1>&2", _fg = True)
 		# Background command has not finished yet.
 		with pytest.raises(RuntimeError):
 			cmdy.sleep(.5, _bg = True).stderr
-		
+
 		# stdout REDIRECTED
 		c = cmdy.echo(123)
 		c.p.stderr = None

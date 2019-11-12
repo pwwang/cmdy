@@ -4,21 +4,15 @@ import os
 import sys
 import time
 import threading
+import logging
 import subprocess
 from datetime import datetime
 from collections import OrderedDict
 from simpleconf import Config
 from modkit import Modkit
 
-
-try:  # py3
-	from shlex import quote as _quote
-	from queue import Queue, Empty as QueueEmpty
-	IS_PY3 = True
-except ImportError:  # py2
-	from pipes import quote as _quote
-	from Queue import Queue, Empty as QueueEmpty
-	IS_PY3 = False
+from shlex import quote as _quote
+from queue import Queue, Empty as QueueEmpty
 
 _shquote = lambda s: _quote(str(s))
 
@@ -37,7 +31,7 @@ class _Utils:
 		'_sep'     : ' ',
 		'_prefix'  : 'auto',
 		'_hold'    : False,
-		'_report'  : False,
+		'_debug'   : False,
 		'_dupkey'  : False,
 		'_bake'    : False,
 		'_iter'    : False,
@@ -58,7 +52,7 @@ class _Utils:
 		'_shell', '_cwd', '_env', '_universal_newlines', '_startupinfo', '_creationflags', '_restore_signals', \
 		'_start_new_session', '_pass_fds', '_encoding', '_errors', '_text')
 	kw_arg_keys         = ('_sep', '_prefix', '_dupkey', '_raw')
-	call_arg_keys       = ('_exe', '_hold', '_report', '_raise', '_okcode', '_bake', '_iter', '_pipe', '_timeout', '_bg', '_fg', '_out', '_out_', '_err', '_err_')
+	call_arg_keys       = ('_exe', '_hold', '_debug', '_raise', '_okcode', '_bake', '_iter', '_pipe', '_timeout', '_bg', '_fg', '_out', '_out_', '_err', '_err_')
 	call_arg_validators = (
 		('_out', '_pipe', 'Cannot pipe a command with outfile specified.'),
 		('_out', '_out_', 'Cannot set both _out and _out_.'),
@@ -325,12 +319,16 @@ class CmdyReturnCodeException(Exception):
 class CmdyResult(_Valuable):
 
 	def __init__(self, cmd, call_args, popen_args):
+		self.logger     = logging.getLogger(__name__)
+		if not self.logger.handlers:
+			handler = logging.StreamHandler()
+			handler.setFormatter(logging.Formatter(
+				'[%(asctime)-15s %(levelname)5s][%(name)s] %(message)s'))
+			self.logger.addHandler(handler)
+
 		self.done        = False
 		self.p           = None
-		self.popen_args  = {
-			key[1:]:val for key, val in popen_args.items()
-			if IS_PY3 or key not in ('_restore_signals', '_start_new_session', '_pass_fds', '_encoding', '_errors', '_text')
-		}
+		self.popen_args  = {key[1:]:val for key, val in popen_args.items()}
 		self.call_args   = call_args
 		self.should_wait = True
 		self.should_run  = True
@@ -359,7 +357,7 @@ class CmdyResult(_Valuable):
 
 		# put the arguments in right type
 		self.call_args['_timeout'] = float(self.call_args['_timeout'])
-		for key in ('_dupkey', '_hold', '_report', '_raise', '_bake', '_pipe', '_raw' , '_fg'):
+		for key in ('_dupkey', '_hold', '_debug', '_raise', '_bake', '_pipe', '_raw' , '_fg'):
 			if not key in self.call_args or isinstance(self.call_args[key], bool):
 				continue
 			self.call_args[key] = self.call_args[key] in ('True', 'TRUE', 'T', 't', 'true', 1, '1')
@@ -396,7 +394,16 @@ class CmdyResult(_Valuable):
 			else: #if _err_:
 				self.popen_args['stderr'] = open(_err_, 'a')
 
+		if self.call_args['_debug']:
+			self.logger.setLevel('DEBUG')
+		else:
+			self.logger.setLevel('INFO')
+
+		self.logger.debug('call_args: %s', self.call_args)
+		self.logger.debug('popen_args: %s', self.popen_args)
+
 		if _Utils.get_piped() or self.call_args['_hold']:
+			self.logger.debug('Command is piped or held, will be be running.')
 			self.should_run = False
 
 		if call_args['_pipe']:
@@ -412,12 +419,14 @@ class CmdyResult(_Valuable):
 	def _fix_popen_env(self):
 		if 'env' not in self.popen_args or not self.popen_args['env']:
 			return
+		self.logger.debug('Try to update environment.')
 		update = self.popen_args['env'].pop('_update', True)
 		if not update:
 			return
 		env = os.environ.copy()
 		env.update({key: str(val) for key, val in self.popen_args['env'].items()})
 		self.popen_args['env'] = env
+		self.logger.debug('Env: %s', env)
 
 	def __del__(self):
 		#if self.call_args['_fg']: # don't close sys.stdout and sys.stderr
@@ -447,25 +456,21 @@ class CmdyResult(_Valuable):
 		self._stderr     = ''
 
 	def run(self):
+		self.logger.debug('Start to run the command.')
 		if self.done:
+			self.logger.debug('Command is done, using previous results.')
 			return
 
 		self.done = True
 		if self._piped is not None:
+			self.logger.debug('Using piped stdin.')
 			self._piped.run()
 			self.popen_args['stdin'] = self._piped.p.stdout
-		if self.call_args['_report']:
-			try:
-				self.popen_args['stderr'].write("[{}][{}] {}\n".format(
-					datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-					__name__,
-					self.cmd
-				))
-			except (AttributeError, KeyError): # pragma: no cover
-				pass
+		self.logger.debug('Running: %s' % self.cmd)
 		self.p    = subprocess.Popen(self.cmd, shell = True, **self.popen_args)
 		self.pid  = self.p.pid
 		if self.should_wait:
+			self.logger.debug('Waiting for the command to be done ...')
 			self._wait()
 
 	def post_handling(self):
@@ -545,6 +550,7 @@ class CmdyResult(_Valuable):
 			self.rc = self.p.wait()
 			self.raise_rc()
 		elif self.call_args['_bg'] or self.call_args['_iter']:
+			self.logger.debug('Command running in background now.')
 			self.post_handling_bg()
 		else:
 			self.post_handling()
@@ -659,4 +665,4 @@ def _modkit_call(oldmod, newmod, **kwargs):
 	newmod._Utils.piped_pool = oldmod._Utils.piped_pool
 
 Modkit().ban(
-	'os', 'sys', 'time', 'threading', 'subprocess', 'Config', 'Queue', 'QueueEmpty', 'IS_PY3')
+	'os', 'sys', 'time', 'threading', 'subprocess', 'Config', 'Queue', 'QueueEmpty')
