@@ -323,7 +323,7 @@ class CmdyResult(_Valuable):
 		if not self.logger.handlers:
 			handler = logging.StreamHandler()
 			handler.setFormatter(logging.Formatter(
-				'[%(asctime)-15s %(levelname)5s][%(name)s] %(message)s'))
+				'[%(asctime)-15s %(levelname)5s][%(name)s][%(thread)d] %(message)s'))
 			self.logger.addHandler(handler)
 
 		self.done        = False
@@ -399,6 +399,7 @@ class CmdyResult(_Valuable):
 		else:
 			self.logger.setLevel('INFO')
 
+		self.logger.debug('=============================== START ===============================')
 		self.logger.debug('call_args: %s', self.call_args)
 		self.logger.debug('popen_args: %s', self.popen_args)
 
