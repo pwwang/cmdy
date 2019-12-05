@@ -104,6 +104,9 @@ class TestCmdy(object):
 	def testArgsFalse(self):
 		assert cmdy.bash(c = 'echo 1', e = False, _hold = 'true').cmd == 'bash -c \'echo 1\''
 
+	def testKeywordArgs(self):
+		assert cmdy.bash(out = '123', _hold = 'true').cmd == 'bash --out 123'
+
 class TestCmdyResult(object):
 
 	def test(self):
@@ -385,3 +388,11 @@ class TestUtils(object):
 		assert args == "-l 4 -a 8 -bc 'New File' 1 2"
 		assert keywords == {'':[], '_':[], 'color': True}
 		assert kwargs == {'_prefix': '-', '_sep': ' ', '_raw': False, '_dupkey': False}
+
+	def testParseArgsWithKeywords(self):
+		args, keywords, kwargs, call_args, popen_args = cmdy._Utils.parse_args('ls', ['-l'], {'out': 123, 'color': True})
+		assert args == '-l'
+		assert keywords == {'':[], '_':[], 'color': True, 'out': 123}
+		assert kwargs == {key: cmdy._Utils.default_config[key] for key in cmdy._Utils.kw_arg_keys if key in cmdy._Utils.default_config}
+		assert call_args == {key: cmdy._Utils.default_config[key] for key in cmdy._Utils.call_arg_keys if key in cmdy._Utils.default_config}
+		assert popen_args == {key: cmdy._Utils.default_config[key] for key in cmdy._Utils.popen_arg_keys if key in cmdy._Utils.default_config}
