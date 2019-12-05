@@ -1,0 +1,4 @@
+modkit
+pytest
+pytest-cov
+python-simpleconf
