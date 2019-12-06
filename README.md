@@ -21,7 +21,7 @@ pip install cmdy
   # but now I somehow want to run `ls` (without `-l`) command with `ls()`
   ls(l = False) # not work
   ```
-- Unable to save configurations for commands, since commands have their solid preferences. 
+- Unable to save configurations for commands, since commands have their solid preferences.
 - Unable to specify full path of an executable.
 - No pipe/redirection notations.
 
@@ -42,15 +42,15 @@ tar("cvf", "/tmp/test.tar", "/my/home/directory/")
 curl("http://duckduckgo.com/", o="page.html", silent=True)
 # curl http://duckduckgo.com/ -o page.html --silent
 ```
-__Order keyword arguments:__  
+__Order keyword arguments:__
 ```python
 curl("http://duckduckgo.com/", "-o", "page.html", "--silent")
-# or 
+# or
 from collections import OrderedDict
 curl("http://duckduckgo.com/", OrderedDict([('o', 'page.html'), ('silent', True)]))
 ```
 
-__Prefix and separator for keyword arguments:__  
+__Prefix and separator for keyword arguments:__
 ```python
 from cmdy import bedtools, bcftools, ls
 bedtools.intersect(wa = True, wb = True, a = 'query.bed', b = ['d1.bed', 'd2.bed', 'd3.bed'], names = ['d1', 'd2', 'd3'], sorted = True, _prefix = '-')
@@ -106,7 +106,7 @@ cmdy.CmdyReturnCodeException: Unexpected RETURN CODE 127, expecting: [0]
   [STDERR] /bin/sh: x: command not found
 
 ```
-You can use try/catch to catch it:  
+You can use try/catch to catch it:
 ```python
 from cmdy import x, CmdyReturnCodeException
 try:
@@ -123,7 +123,7 @@ from cmdy import ifconfig
 ifconfig(_out="/tmp/interfaces")
 # or you can use shell redirection notation
 ifconfig(_out = ">") > "/tmp/interfaces"
-# or 
+# or
 # ifconfig(_out = "/tmp/interfaces")
 
 ## append
@@ -137,14 +137,14 @@ ifconfig(_err = ">") > "/tmp/ifconfig.errors"
 ```
 
 ## Iteration on output
-```python 
+```python
 from cmdy import tail
 for line in tail(_ = 'test.txt', _iter = True):
   print(line)
 ```
 
 ## Background processes
-For command you want to run it in non-block mode, you probably would like to use `_bg` keyword:  
+For command you want to run it in non-block mode, you probably would like to use `_bg` keyword:
 ```python
 for line in tail(_ = 'test.txt', _bg = True, _iter = True):
   print(line)
@@ -162,7 +162,7 @@ p.wait()
 print("...and 3 seconds later")
 ```
 
-Callbacks for background processes:  
+Callbacks for background processes:
 ```python
 import time
 from cmdy import sleep
@@ -180,7 +180,7 @@ picard = java.bake(dict(jar = 'picard.jar', _sep = ' ', _prefix = '-'))
 #picard.SortSam(...)
 ```
 
-Unlike `sh`, `cmdy` holds the keyword arguments, and updates them while baked into a new command. This enables it to replace some arguments with the new baked command.  
+Unlike `sh`, `cmdy` holds the keyword arguments, and updates them while baked into a new command. This enables it to replace some arguments with the new baked command.
 ```python
 from cmdy import ls
 
@@ -192,7 +192,7 @@ ls() # ls -l
 ls(l = False)
 ```
 
-Note that non-keyword arguments is not updatable.  
+Note that non-keyword arguments is not updatable.
 ```python
 ls = ls.bake('-l')
 ls() # ls -l
@@ -201,7 +201,7 @@ ls() # ls -l
 ls(l = False)
 ```
 
-Bake the whole module:  
+Bake the whole module:
 ```python
 import cmdy
 cmdy = cmdy(_fg = True)
@@ -231,7 +231,7 @@ fc_cache(_exe = 'fc-cache', vf = '~/.fonts/', _prefix = '-')
 python(_exe = '/home/user/miniconda3/bin/python3', version = True)
 # /home/user/miniconda3/bin/python3 --version
 ```
-Always alias `fc_cache` to `fc-cache` and point `python` to `/home/user/miniconda3/bin/python3`, add the following to your `~/.cmdy.ini`  
+Always alias `fc_cache` to `fc-cache` and point `python` to `/home/user/miniconda3/bin/python3`, add the following to your `~/.cmdy.ini`
 ```ini
 [fc_cache]
 _exe = fc-cache
@@ -276,13 +276,13 @@ python(version = True)
 And then try to load `$HOME/.cmdy.ini`, `./.cmdy.ini` and environment variables starting with `CMDY_`, so you can overwrite the configurations with temporary environment variables.
 
 For example, I want to always use raw keyword option:
-`~/.cmdy.ini`  
+`~/.cmdy.ini`
 ```ini
 [default]
 _raw: True
 ```
 
-`ontotator.py`:  
+`ontotator.py`:
 ```python
 from cmdy import oncotator
 oncotator(log_name = '/path/to/log', ...)
@@ -307,5 +307,5 @@ python oncotator.py
 [6]: https://travis-ci.org/pwwang/cmdy
 [7]: https://img.shields.io/codacy/grade/c82a7081cfc94f089199dafed484e5c3?style=flat-square
 [8]: https://app.codacy.com/project/pwwang/cmdy/dashboard
-[9]: https://img.shields.io/codacy/coverage/c82a7081cfc94f089199dafed484e5c3?style=flat-square 
+[9]: https://img.shields.io/codacy/coverage/c82a7081cfc94f089199dafed484e5c3?style=flat-square
 [10]: https://img.shields.io/pypi/pyversions/cmdy?style=flat-square

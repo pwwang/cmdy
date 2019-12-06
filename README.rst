@@ -54,7 +54,7 @@ Why another one beyond ``sh``\ ?
      # but now I somehow want to run `ls` (without `-l`) command with `ls()`
      ls(l = False) # not work
 
-* Unable to save configurations for commands, since commands have their solid preferences. 
+* Unable to save configurations for commands, since commands have their solid preferences.
 * Unable to specify full path of an executable.
 * No pipe/redirection notations.
 
@@ -84,16 +84,16 @@ With keyword arguments
    curl("http://duckduckgo.com/", o="page.html", silent=True)
    # curl http://duckduckgo.com/ -o page.html --silent
 
-**Order keyword arguments:**  
+**Order keyword arguments:**
 
 .. code-block:: python
 
    curl("http://duckduckgo.com/", "-o", "page.html", "--silent")
-   # or 
+   # or
    from collections import OrderedDict
    curl("http://duckduckgo.com/", OrderedDict([('o', 'page.html'), ('silent', True)]))
 
-**Prefix and separator for keyword arguments:**  
+**Prefix and separator for keyword arguments:**
 
 .. code-block:: python
 
@@ -154,7 +154,7 @@ Return codes and exceptions
 
      [STDERR] /bin/sh: x: command not found
 
-You can use try/catch to catch it:  
+You can use try/catch to catch it:
 
 .. code-block:: python
 
@@ -175,7 +175,7 @@ Redirection
    ifconfig(_out="/tmp/interfaces")
    # or you can use shell redirection notation
    ifconfig(_out = ">") > "/tmp/interfaces"
-   # or 
+   # or
    # ifconfig(_out = "/tmp/interfaces")
 
    ## append
@@ -199,7 +199,7 @@ Iteration on output
 Background processes
 --------------------
 
-For command you want to run it in non-block mode, you probably would like to use ``_bg`` keyword:  
+For command you want to run it in non-block mode, you probably would like to use ``_bg`` keyword:
 
 .. code-block:: python
 
@@ -218,7 +218,7 @@ For command you want to run it in non-block mode, you probably would like to use
    p.wait()
    print("...and 3 seconds later")
 
-Callbacks for background processes:  
+Callbacks for background processes:
 
 .. code-block:: python
 
@@ -239,7 +239,7 @@ Baking
    picard = java.bake(dict(jar = 'picard.jar', _sep = ' ', _prefix = '-'))
    #picard.SortSam(...)
 
-Unlike ``sh``\ , ``cmdy`` holds the keyword arguments, and updates them while baked into a new command. This enables it to replace some arguments with the new baked command.  
+Unlike ``sh``\ , ``cmdy`` holds the keyword arguments, and updates them while baked into a new command. This enables it to replace some arguments with the new baked command.
 
 .. code-block:: python
 
@@ -252,7 +252,7 @@ Unlike ``sh``\ , ``cmdy`` holds the keyword arguments, and updates them while ba
    # I don't want -l anymore
    ls(l = False)
 
-Note that non-keyword arguments is not updatable.  
+Note that non-keyword arguments is not updatable.
 
 .. code-block:: python
 
@@ -262,7 +262,7 @@ Note that non-keyword arguments is not updatable.
    # Not work, still ls -l
    ls(l = False)
 
-Bake the whole module:  
+Bake the whole module:
 
 .. code-block:: python
 
@@ -300,7 +300,7 @@ Aliasing/Specifying full path of executables for commands
    python(_exe = '/home/user/miniconda3/bin/python3', version = True)
    # /home/user/miniconda3/bin/python3 --version
 
-Always alias ``fc_cache`` to ``fc-cache`` and point ``python`` to ``/home/user/miniconda3/bin/python3``\ , add the following to your ``~/.cmdy.ini``  
+Always alias ``fc_cache`` to ``fc-cache`` and point ``python`` to ``/home/user/miniconda3/bin/python3``\ , add the following to your ``~/.cmdy.ini``
 
 .. code-block:: ini
 
@@ -351,14 +351,14 @@ Configuration
 And then try to load ``$HOME/.cmdy.ini``\ , ``./.cmdy.ini`` and environment variables starting with ``CMDY_``\ , so you can overwrite the configurations with temporary environment variables.
 
 For example, I want to always use raw keyword option:
-``~/.cmdy.ini``  
+``~/.cmdy.ini``
 
 .. code-block:: ini
 
    [default]
    _raw: True
 
-``ontotator.py``\ :  
+``ontotator.py``\ :
 
 .. code-block:: python
 

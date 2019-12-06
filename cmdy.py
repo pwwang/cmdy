@@ -1,3 +1,5 @@
+"""A handy package to run command from python"""
+
 __version__ = "0.2.0"
 
 import os
@@ -6,15 +8,14 @@ import time
 import threading
 import logging
 import subprocess
-from datetime import datetime
 from collections import OrderedDict
-from simpleconf import Config
-from modkit import Modkit
 
 from shlex import quote as _quote
 from queue import Queue, Empty as QueueEmpty
+from modkit import Modkit
+from simpleconf import Config
 
-_shquote = lambda s: _quote(str(s))
+_shquote = lambda s: _quote(str(s)) # pylint: disable=invalid-name
 
 DEVERR     = '/dev/stderr'
 DEVOUT     = '/dev/stdout'
@@ -48,11 +49,13 @@ class _Utils:
 		'_err_'    : None
 	}
 
-	popen_arg_keys = ('_bufsize', '_executable', '_stdin', '_stdout', '_stderr', '_preexec_fn', '_close_fds', \
-		'_shell', '_cwd', '_env', '_universal_newlines', '_startupinfo', '_creationflags', '_restore_signals', \
-		'_start_new_session', '_pass_fds', '_encoding', '_errors', '_text')
+	popen_arg_keys = ('_bufsize', '_executable', '_stdin', '_stdout', '_stderr', '_preexec_fn',
+		'_close_fds', '_shell', '_cwd', '_env', '_universal_newlines', '_startupinfo',
+		'_creationflags', '_restore_signals', '_start_new_session', '_pass_fds', '_encoding',
+		'_errors', '_text')
 	kw_arg_keys         = ('_sep', '_prefix', '_dupkey', '_raw')
-	call_arg_keys       = ('_exe', '_hold', '_debug', '_raise', '_okcode', '_bake', '_iter', '_pipe', '_timeout', '_bg', '_fg', '_out', '_out_', '_err', '_err_')
+	call_arg_keys       = ('_exe', '_hold', '_debug', '_raise', '_okcode', '_bake', '_iter',
+		'_pipe', '_timeout', '_bg', '_fg', '_out', '_out_', '_err', '_err_')
 	call_arg_validators = (
 		('_out', '_pipe', 'Cannot pipe a command with outfile specified.'),
 		('_out', '_out_', 'Cannot set both _out and _out_.'),
@@ -66,10 +69,11 @@ class _Utils:
 
 	@staticmethod
 	def get_piped():
-		pp = _Utils.piped_pool
-		if not hasattr(pp, "_piped"):
-			pp._piped = []
-		return pp._piped
+		"""Get piped command"""
+		ppool = _Utils.piped_pool
+		if not hasattr(ppool, "_piped"):
+			ppool._piped = []
+		return ppool._piped
 
 	@staticmethod
 	def parse_args(name, args, kwargs, baked_keywords = None, baked_kw_args = None,
@@ -126,6 +130,7 @@ class _Utils:
 
 	@staticmethod
 	def parse_kwargs(kwargs, conf, checkraw = False):
+		"""Parse kwargs"""
 		positional0 = kwargs.pop('', [])
 		if not isinstance(positional0, (tuple, list)):
 			positional0 = [positional0]
@@ -151,8 +156,7 @@ class _Utils:
 			if isinstance(val, bool):
 				if not val:
 					continue
-				else:
-					ret.append('{prefix}{key}'.format(prefix = prefix, key = key))
+				ret.append('{prefix}{key}'.format(prefix = prefix, key = key))
 			elif isinstance(val, (tuple, list)):
 				if not conf['_dupkey']:
 					ret.append('{prefix}{key}{sep}{vals}'.format(
@@ -165,28 +169,31 @@ class _Utils:
 						sep    = sep,    v   = _shquote(str(v))
 					) for v in val)
 			else:
-				ret.append('{prefix}{key}{sep}{val}'.format(prefix = prefix, key = key, sep = sep, val = _shquote(str(val))))
+				ret.append('{prefix}{key}{sep}{val}'.format(
+					prefix = prefix, key = key, sep = sep, val = _shquote(str(val))))
 
 		ret.extend(_shquote(str(pos1)) for pos1 in positional1)
 
 		return ' '.join(ret)
 
-class _Valuable(object):
+class _Valuable:
 
-	STR_METHODS = ('capitalize', 'center', 'count', 'decode', 'encode', 'endswith', \
-		'expandtabs', 'find', 'format', 'index', 'isalnum', 'isalpha', 'isdigit', \
-		'islower', 'isspace', 'istitle', 'isupper', 'join', 'ljust', 'lower', 'lstrip', \
-		'partition', 'replace', 'rfind', 'rindex', 'rjust', 'rpartition', 'rsplit', \
-		'rstrip', 'split', 'splitlines', 'startswith', 'strip', 'swapcase', 'title', \
+	STR_METHODS = ('capitalize', 'center', 'count', 'decode', 'encode', 'endswith',
+		'expandtabs', 'find', 'format', 'index', 'isalnum', 'isalpha', 'isdigit',
+		'islower', 'isspace', 'istitle', 'isupper', 'join', 'ljust', 'lower', 'lstrip',
+		'partition', 'replace', 'rfind', 'rindex', 'rjust', 'rpartition', 'rsplit',
+		'rstrip', 'split', 'splitlines', 'startswith', 'strip', 'swapcase', 'title',
 		'translate', 'upper', 'zfill')
 
 	def __str__(self):
 		return str(self.value)
 
 	def str(self):
+		"""Get stringified value"""
 		return str(self.value)
 
 	def int(self, raise_exc = True):
+		"""Get int value"""
 		try:
 			return int(self.value)
 		except Exception:
@@ -195,6 +202,7 @@ class _Valuable(object):
 			return None
 
 	def float(self, raise_exc = True):
+		"""Get float value"""
 		try:
 			return float(self.value)
 		except Exception:
@@ -230,12 +238,13 @@ class _Valuable(object):
 	def __ne__(self, other):
 		return not self.__eq__(other)
 
-config = Config()
+config = Config() # pylint: disable=invalid-name
 config._load(dict(default = _Utils.default_config), '~/.cmdy.ini', './.cmdy.ini', 'CMDY.osenv')
 
-class Cmdy(object):
-
-	def __init__(self, exe, cmd = '', keywords = None, kw_args = None, call_args = None, popen_args = None):
+class Cmdy:
+	"""The main class to handle the command"""
+	def __init__(self, exe, cmd = '', keywords = None,
+		kw_args = None, call_args = None, popen_args = None):
 		self._exe = exe
 		self._cmd = cmd
 		self.keywords   = keywords or {}
@@ -258,11 +267,13 @@ class Cmdy(object):
 			)
 		exe       = call_args.get('_exe', self._exe) or self._exe
 		self._exe = exe
-		cmd_parts = [_shquote(exe), self._cmd, naked_cmd, _Utils.parse_kwargs(keywords, kw_args, True)]
+		cmd_parts = [_shquote(exe), self._cmd, naked_cmd,
+			_Utils.parse_kwargs(keywords, kw_args, True)]
 		cmd       = ' '.join(filter(None, cmd_parts))
 		return CmdyResult(cmd, call_args, popen_args)
 
 	def bake(self, *args, **kwargs):
+		"""Bake the instance"""
 		kwargs['_bake'] = True
 		return self(*args, **kwargs)
 
@@ -270,6 +281,7 @@ class Cmdy(object):
 		return self.__class__(self._exe, ' '.join(filter(None, [self._cmd, subcmd])))
 
 class CmdyTimeoutException(Exception):
+	"""Exception when the command exceeds the allowed time"""
 	def __init__(self, cmdy):
 		self.cmdy = cmdy
 		msg  = 'Command not finished in %s second(s).\n\n' % cmdy.call_args['_timeout']
@@ -280,7 +292,7 @@ class CmdyTimeoutException(Exception):
 		super(CmdyTimeoutException, self).__init__(msg)
 
 class CmdyReturnCodeException(Exception):
-
+	"""Exception with unexpected return code"""
 	def __init__(self, cmdy):
 		self.cmdy = cmdy
 		msg  = 'Unexpected RETURN CODE %s, expecting: %s\n' % (cmdy.rc, cmdy.call_args['_okcode'])
@@ -317,8 +329,8 @@ class CmdyReturnCodeException(Exception):
 		super(CmdyReturnCodeException, self).__init__(msg)
 
 class CmdyResult(_Valuable):
-
-	def __init__(self, cmd, call_args, popen_args):
+	"""The result of a command"""
+	def __init__(self, cmd, call_args, popen_args): # pylint: disable=too-many-statements
 		self.logger     = logging.getLogger(__name__)
 		if not self.logger.handlers:
 			handler = logging.StreamHandler()
@@ -346,14 +358,15 @@ class CmdyResult(_Valuable):
 		elif not isinstance(okcode, list):
 			okcode_items = okcode.split(',')
 			okcode = []
-			for oc in okcode_items:
-				if '~' in oc:
-					start, end = oc.strip().split('~', 1)
+			for ocode in okcode_items:
+				if '~' in ocode:
+					start, end = ocode.strip().split('~', 1)
 					okcode.extend(range(int(start), int(end) + 1))
 				else:
-					okcode.append(oc)
+					okcode.append(ocode)
 
-		self.call_args['_okcode'] = [oc if isinstance(oc, int) else int(oc.strip()) for oc in okcode]
+		self.call_args['_okcode'] = [ocode if isinstance(ocode, int) else int(ocode.strip())
+			for ocode in okcode]
 
 		# put the arguments in right type
 		self.call_args['_timeout'] = float(self.call_args['_timeout'])
@@ -448,6 +461,7 @@ class CmdyResult(_Valuable):
 				self.popen_args['stderr'].close()
 
 	def reset(self):
+		"""Reset the status"""
 		self.done        = False
 		self.p           = None
 		self.should_wait = True
@@ -457,6 +471,7 @@ class CmdyResult(_Valuable):
 		self._stderr     = ''
 
 	def run(self):
+		"""Run the command"""
 		self.logger.debug('Start to run the command.')
 		if self.done:
 			self.logger.debug('Command is done, using previous results.')
@@ -467,7 +482,7 @@ class CmdyResult(_Valuable):
 			self.logger.debug('Using piped stdin.')
 			self._piped.run()
 			self.popen_args['stdin'] = self._piped.p.stdout
-		self.logger.debug('Running: %s' % self.cmd)
+		self.logger.debug('Running: %s', self.cmd)
 		self.p    = subprocess.Popen(self.cmd, shell = True, **self.popen_args)
 		self.pid  = self.p.pid
 		if self.should_wait:
@@ -478,7 +493,7 @@ class CmdyResult(_Valuable):
 		"""
 		Deal with stuff after jobs being submitted
 		"""
-		t0 = time.time()
+		time0 = time.time()
 		while True:
 			# _iter, _bg, _timeout
 			if self.call_args['_iter']:
@@ -491,7 +506,7 @@ class CmdyResult(_Valuable):
 				elif self.p.poll() is not None:
 					break
 				time.sleep(.1)
-				if self.call_args['_timeout'] and time.time() - t0 > self.call_args['_timeout']:
+				if self.call_args['_timeout'] and time.time() - time0 > self.call_args['_timeout']:
 					self.p.terminate()
 					# to eliminate ResourceWarning from python3
 					self.p.wait()
@@ -500,7 +515,7 @@ class CmdyResult(_Valuable):
 			elif self.call_args['_timeout']:
 				if self.p.poll() is None:
 					time.sleep(.1)
-					if time.time() - t0 > self.call_args['_timeout']:
+					if time.time() - time0 > self.call_args['_timeout']:
 						self.p.terminate()
 						# to eliminate ResourceWarning from python3
 						self.p.wait()
@@ -527,11 +542,13 @@ class CmdyResult(_Valuable):
 			self.call_args['_bg'](self)
 
 	def post_handling_bg(self):
+		"""Post handling background command"""
 		thr = threading.Thread(target = self.post_handling)
 		thr.daemon = True
 		thr.start()
 
 	def raise_rc(self):
+		"""Raise with a return code"""
 		if not self.call_args['_raise'] or self.rc in self.call_args['_okcode']:
 			return
 		raise CmdyReturnCodeException(self)
@@ -557,15 +574,16 @@ class CmdyResult(_Valuable):
 			self.post_handling()
 
 	def next(self):
+		"""Get next line of output stream"""
 		if not self.done:
 			raise RuntimeError('Command not started to run yet.')
-		elif not self.p:
+		if not self.p:
 			raise RuntimeError('Failed to open a process.')
-		elif self.call_args['_iter'] == 'err' and not self.p.stderr:
+		if self.call_args['_iter'] == 'err' and not self.p.stderr:
 			raise RuntimeError('No stderr captured, may be redirected.')
-		elif  self.call_args['_iter'] in (True, 'out') and not self.p.stdout:
+		if  self.call_args['_iter'] in (True, 'out') and not self.p.stdout:
 			raise RuntimeError('No stdout captured, may be redirected.')
-		elif not self.call_args['_iter']:
+		if not self.call_args['_iter']:
 			raise RuntimeError('CmdyResult is not iterrable with _iter = False.')
 
 		try:
@@ -583,40 +601,43 @@ class CmdyResult(_Valuable):
 
 	@property
 	def stdout(self):
+		"""Get the stdout"""
 		if not self.done:
 			raise RuntimeError('Command not started to run yet.')
-		elif self.call_args['_fg']:
+		if self.call_args['_fg']:
 			return ''
-		elif not self.p:
+		if not self.p:
 			raise RuntimeError('Failed to open a process.')
-		elif self.call_args['_bg'] and self.p.poll() is None:
+		if self.call_args['_bg'] and self.p.poll() is None:
 			raise RuntimeError('Background command has not finished yet.')
-		elif not self.p.stdout:
+		if not self.p.stdout:
 			raise RuntimeError('No stdout captured, may be redirected.')
-		elif self.call_args['_iter'] in (True, 'out'):
+		if self.call_args['_iter'] in (True, 'out'):
 			return self
-		elif not self._stdout:
+		if not self._stdout:
 			self._stdout = self.p.stdout.read()
 		return self._stdout
 
 	@property
 	def stderr(self):
+		"""Get the stderr"""
 		if not self.done:
 			raise RuntimeError('Command not starts to run yet.')
-		elif not self.p:
+		if not self.p:
 			raise RuntimeError('Failed to open a process.')
-		elif self.call_args['_bg'] and self.p.poll() is None:
+		if self.call_args['_bg'] and self.p.poll() is None:
 			raise RuntimeError('Background command has not finished yet.')
-		elif not self.p.stderr:
+		if not self.p.stderr:
 			raise RuntimeError('No stderr captured, may be redirected.')
-		elif self.call_args['_iter'] == 'err':
+		if self.call_args['_iter'] == 'err':
 			return self
-		elif not self._stderr:
+		if not self._stderr:
 			self._stderr = self.p.stderr.read()
 		return self._stderr
 
 	@property
 	def value(self):
+		"""Get the value"""
 		return self.stdout if self.done else self.cmd
 
 	def __repr__(self):
@@ -639,6 +660,7 @@ class CmdyResult(_Valuable):
 
 	@property
 	def pipedcmd(self):
+		"""Get the entire command with previous piped commands"""
 		if self._piped is None:
 			return self.cmd
 		return self._piped.cmd + ' | ' + self.cmd
