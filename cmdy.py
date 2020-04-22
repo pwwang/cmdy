@@ -91,7 +91,7 @@ class _Utils:
         Get the arguments in string, keywords (unparsed kwargs),
         kw_args, call_args and popen_args
         """
-        cfg = config._use(name, copy=True)
+        cfg = config._use(name, 'default', copy=True)
         # cmdy2 = cmdy(l = True)
         # from cmdy import ls
         # ls() # ls -l
