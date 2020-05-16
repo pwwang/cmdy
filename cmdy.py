@@ -106,7 +106,7 @@ class _Utils:
         kw_args = {}
         call_args = {}
         popen_args = {}
-        for key, val in cfg.items():
+        for key, val in list(cfg.items()):
             # if the package is used in R reticulate
             # use .hold instead of _hold
             if key and key[0] == '.':
