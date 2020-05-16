@@ -4,7 +4,7 @@ build-backend = "poetry.masonry.api"
 
 [tool.poetry]
 name = "cmdy"
-version = "0.2.1"
+version = "0.2.2"
 description = "A handy package to run command from python"
 authors = [ "pwwang <pwwang@pwwang.com>",]
 license = "MIT"
