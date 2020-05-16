@@ -314,57 +314,64 @@ class Cmdy:
 class CmdyTimeoutException(Exception):
     """Exception when the command exceeds the allowed time"""
     def __init__(self, cmdy):
-        self.cmdy = cmdy
-        msg = 'Command not finished in %s second(s).\n\n' % cmdy.call_args[
-            '_timeout']
-        msg += '  [PID] %s' % cmdy.pid
-        msg += '\n'
-        msg += '  [CMD] %s' % cmdy.cmd
-        msg += '\n'
-        super(CmdyTimeoutException, self).__init__(msg)
+        if isinstance(cmdy, CmdyResult):
+            msg = 'Command not finished in %s second(s).\n\n' % cmdy.call_args[
+                '_timeout']
+            msg += '  [PID] %s' % cmdy.pid
+            msg += '\n'
+            msg += '  [CMD] %s' % cmdy.cmd
+            msg += '\n'
+        else: # pragma: no cover
+            msg = str(cmdy)
+        super().__init__(msg)
 
 
 class CmdyReturnCodeException(Exception):
     """Exception with unexpected return code"""
     def __init__(self, cmdy):
-        self.cmdy = cmdy
-        msg = 'Unexpected RETURN CODE %s, expecting: %s\n' % (
-            cmdy.rc, cmdy.call_args['_okcode'])
-        msg += '\n'
-        msg += '  [PID] %s\n' % (cmdy.pid if cmdy.pid and cmdy.rc != -1 else
-                                 'Not launched.')
-        msg += '\n'
-        msg += '  [CMD] %s\n' % cmdy.cmd
-        msg += '\n'
-        msg += '  [CALL_ARGS] %s\n' % cmdy.call_args
-        msg += '\n'
-        msg += '  [POPEN_ARGS] %s\n' % cmdy.popen_args
-        msg += '\n'
-        if cmdy.call_args['_iter'] in (
-                'out', True) or not cmdy.p or not cmdy.p.stdout:
-            msg += '  [STDOUT] <ITERRATED / REDIRECTED>\n'
-        else:
-            outs = cmdy.stdout.splitlines()
-            msg += '  [STDOUT] %s\n' % (outs.pop().rstrip('\n')
-                                        if outs else '')
-            for out in outs[:31]:
-                msg += '           %s\n' % out.rstrip('\n')
-            if len(outs) > 32:
-                msg += '           [%s line(s) hidden.]\n' % (len(outs) - 32)
-        msg += '\n'
+        if isinstance(cmdy, CmdyResult):
+            msg = 'Unexpected RETURN CODE %s, expecting: %s\n' % (
+                cmdy.rc, cmdy.call_args['_okcode'])
+            msg += '\n'
+            msg += '  [PID] %s\n' % (cmdy.pid
+                                     if cmdy.pid and cmdy.rc != -1
+                                     else 'Not launched.')
+            msg += '\n'
+            msg += '  [CMD] %s\n' % cmdy.cmd
+            msg += '\n'
+            msg += '  [CALL_ARGS] %s\n' % cmdy.call_args
+            msg += '\n'
+            msg += '  [POPEN_ARGS] %s\n' % cmdy.popen_args
+            msg += '\n'
+            if cmdy.call_args['_iter'] in (
+                    'out', True) or not cmdy.p or not cmdy.p.stdout:
+                msg += '  [STDOUT] <ITERRATED / REDIRECTED>\n'
+            else:
+                outs = cmdy.stdout.splitlines()
+                msg += '  [STDOUT] %s\n' % (outs.pop().rstrip('\n')
+                                            if outs else '')
+                for out in outs[:31]:
+                    msg += '           %s\n' % out.rstrip('\n')
+                if len(outs) > 32:
+                    msg += '           [%s line(s) hidden.]\n' % (len(outs)-32)
+            msg += '\n'
 
-        if cmdy.call_args['_iter'] == 'err' or not cmdy.p or not cmdy.p.stderr:
-            msg += '  [STDERR] <ITERRATED / REDIRECTED>\n'
-        else:
-            errs = cmdy.stderr.splitlines()
-            msg += '  [STDERR] %s\n' % (errs.pop().rstrip('\n')
-                                        if errs else '')
-            for err in errs[:31]:
-                msg += '           %s\n' % err.rstrip()
-            if len(errs) > 32:
-                msg += '           [%s line(s) hidden.]\n' % (len(errs) - 32)
-        msg += '\n'
-        super(CmdyReturnCodeException, self).__init__(msg)
+            if (cmdy.call_args['_iter'] == 'err' or
+                    not cmdy.p or
+                    not cmdy.p.stderr):
+                msg += '  [STDERR] <ITERRATED / REDIRECTED>\n'
+            else:
+                errs = cmdy.stderr.splitlines()
+                msg += '  [STDERR] %s\n' % (errs.pop().rstrip('\n')
+                                            if errs else '')
+                for err in errs[:31]:
+                    msg += '           %s\n' % err.rstrip()
+                if len(errs) > 32:
+                    msg += '           [%s line(s) hidden.]\n' % (len(errs)-32)
+            msg += '\n'
+        else: # pragma: no cover
+            msg = str(cmdy)
+        super().__init__(msg)
 
 
 class CmdyResult(_Valuable): # pylint: disable=too-many-instance-attributes
@@ -427,7 +434,12 @@ class CmdyResult(_Valuable): # pylint: disable=too-many-instance-attributes
             _err_ = call_args.get('_err_')
 
             outpipe = self.popen_args.get('stdout', subprocess.PIPE)
-            errpipe = self.popen_args.get('stderr', subprocess.PIPE)
+            errpipe = self.popen_args.get('stderr',
+                                          # redirect/merge stderr to stdout
+                                          # if _iter is True
+                                          subprocess.STDOUT
+                                          if self.call_args['_iter'] is True
+                                          else subprocess.PIPE)
 
             if not _out and not _out_:
                 self.popen_args['stdout'] = outpipe
@@ -468,7 +480,6 @@ class CmdyResult(_Valuable): # pylint: disable=too-many-instance-attributes
             self.should_run = False
 
         self._fix_popen_env()
-
         if self.should_run:
             self.run()
 
@@ -629,7 +640,7 @@ class CmdyResult(_Valuable): # pylint: disable=too-many-instance-attributes
         else:
             self.post_handling()
 
-    def next(self):
+    def next(self, timeout=None):
         """Get next line of output stream"""
         if not self.done:
             raise RuntimeError('Command not started to run yet.')
@@ -644,8 +655,8 @@ class CmdyResult(_Valuable): # pylint: disable=too-many-instance-attributes
                 'CmdyResult is not iterrable with _iter = False.')
 
         try:
-            item = self.iterq.get()
-        except QueueEmpty:  # pragma: no cover
+            item = self.iterq.get(timeout=timeout)
+        except QueueEmpty:
             return None
         if item is None:
             raise StopIteration()
