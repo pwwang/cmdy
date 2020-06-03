@@ -1,765 +1,1483 @@
 """A handy package to run command from python"""
-
-__version__ = "0.2.2"
-
-import os
-import sys
-import time
-import threading
-import logging
-import subprocess
-from collections import OrderedDict
-
+# pylint: disable=too-many-lines
+# ----------------------------------------------------------
+# Naming rules to save the names for the uses of
+# >>> from cmdy import ...
+#
+# 1. Anything that is imported will be prefixed with '_'
+# 2. Any constants to be exported will be prefixed with 'CMDY_'
+# 3. Any functions to be exported will be prefixed with 'cmdy_'
+# 4. 3 also includes plugin hooks
+# ----------------------------------------------------------
+import sys as _sys
+import fileinput as _fileinput
+from functools import wraps as _wraps
+from threading import Event as _Event
 from shlex import quote as _quote
-from queue import Queue, Empty as QueueEmpty
+import warnings as _warnings
+import inspect as _inspect
+import ast as _ast
+from diot import Diot as _Diot
+# this is ok, it's banned internally
 from modkit import Modkit
-from simpleconf import Config
+from simpleconf import Config as _Config
+import curio as _curio
+from curio import subprocess as _subprocess
+import executing as _executing
 
-_shquote = lambda s: _quote(str(s))  # pylint: disable=invalid-name
+# We cannot define the variables that need to be baked
+# in submodules, because we don't want to deepcopy the
+# whole module.
+_CMDY_DEFAULT_CONFIG = _Diot(
+    cmdy_async=False,
+    cmdy_exe=None,
+    cmdy_dupkey=False,
+    cmdy_okcode=0,
+    cmdy_prefix='auto',
+    cmdy_raise=True,
+    cmdy_sep=' ',
+    cmdy_shell=False,
+    cmdy_encoding='utf-8',
+    cmdy_timeout=0
+)
 
-DEVERR = '/dev/stderr'
-DEVOUT = '/dev/stdout'
+CMDY_CONFIG = _Config()
+CMDY_CONFIG._load(
+    dict(default=_CMDY_DEFAULT_CONFIG),
+    '~/.cmdy.toml',
+    './.cmdy.toml',
+    'CMDY.osenv'
+)
+
+_CMDY_BACKED_ARGS = _Diot()
+_CMDY_EVENT = _Event()
+
+# These are naming exceptions for convenience
+STDIN = -7
+STDOUT = -2
+STDERR = -8
+# or os.devnull?
 DEVNULL = '/dev/null'
-BAKED_ARGS = {}
 
+# The actions that will put left side on hold
+# For example: cmdy.ls().h()
+# will put cmdy.ls() on hold
+_CMDY_HOLDING_LEFT = ['a', 'async_', 'h', 'hold']
+# The actions that will put right side on hold
+# For example: cmdy.ls().r(STDERR).fg() > DEVNULL
+# If "r" is in _CMDY_HOLDING_RIGHT, then fg() will be on hold
+# The command will run by ">"
+_CMDY_HOLDING_RIGHT = []
+_CMDY_HOLDING_FINALS = []
+_CMDY_RESULT_FINALS = []
 
-class _Utils:
+class CmdyBakingError(Exception):
+    """Baking from non-keyword arguments"""
 
-    default_config = {
-        '': [],
-        '_': [],
-        '_okcode': 0,
-        '_exe': None,
-        '_sep': ' ',
-        '_prefix': 'auto',
-        '_hold': False,
-        '_debug': False,
-        '_dupkey': False,
-        '_bake': False,
-        '_iter': False,
-        '_pipe': False,
-        '_raise': True,
-        '_raw': False,
-        '_timeout': 0,
-        '_encoding': 'utf-8',
-        '_bg': False,
-        '_fg': False,
-        '_out': None,
-        '_out_': None,
-        '_err': None,
-        '_err_': None
-    }
+class CmdyActionError(Exception):
+    """Wrong actions taken"""
 
-    popen_arg_keys = ('_bufsize', '_executable', '_stdin', '_stdout',
-                      '_stderr', '_preexec_fn', '_close_fds', '_shell', '_cwd',
-                      '_env', '_universal_newlines', '_startupinfo',
-                      '_creationflags', '_restore_signals',
-                      '_start_new_session', '_pass_fds', '_encoding',
-                      '_errors', '_text')
-    kw_arg_keys = ('_sep', '_prefix', '_dupkey', '_raw')
-    call_arg_keys = ('_exe', '_hold', '_debug', '_raise', '_okcode', '_bake',
-                     '_iter', '_pipe', '_timeout', '_bg', '_fg', '_out',
-                     '_out_', '_err', '_err_')
-    call_arg_validators = (
-        ('_out', '_pipe', 'Cannot pipe a command with outfile specified.'),
-        ('_out', '_out_', 'Cannot set both _out and _out_.'),
-        ('_err', '_err_', 'Cannot set both _err and _err_.'),
-        ('_fg', '_iter', 'Foreground commnad is not iterrable.'),
-        ('_fg', '_timeout', 'Unable to count time for foreground command.'),
-        ('_fg', '_bg', 'Trying to iterate output which redirects to a file.'),
-        ('_iter', '_pipe', 'Unable to iterate a piped command.'),
-    )
-    piped_pool = threading.local()
+class CmdyTimeoutError(Exception):
+    """Timeout running command"""
+
+class CmdyExecNotFoundError(Exception):
+    """Unable to find the executable"""
+
+class CmdyReturnCodeError(Exception):
+    """Unexpected return code"""
 
     @staticmethod
-    def get_piped():
-        """Get piped command"""
-        ppool = _Utils.piped_pool
-        if not hasattr(ppool, "_piped"):
-            ppool._piped = []
-        return ppool._piped
+    def _out_nowait(result, which):
+        if which == STDOUT and getattr(result, '_stdout_str', None) is not None:
+            return result._stdout_str.splitlines()
+        if which == STDERR and getattr(result, '_stderr_str', None) is not None:
+            return result._stderr_str.splitlines()
 
-    @staticmethod
-    def parse_args(name, # pylint: disable=too-many-locals,too-many-arguments
-                   args,
-                   kwargs,
-                   baked_keywords=None,
-                   baked_kw_args=None,
-                   baked_call_args=None,
-                   baked_popen_args=None):
-        """
-        Get the arguments in string, keywords (unparsed kwargs),
-        kw_args, call_args and popen_args
-        """
-        cfg = config._use(name, 'default', copy=True)
-        # cmdy2 = cmdy(l = True)
-        # from cmdy import ls
-        # ls() # ls -l
-        cfg.update(BAKED_ARGS)
-        cfg.update(baked_keywords or {})
-        cfg.update(baked_kw_args or {})
-        cfg.update(baked_call_args or {})
-        cfg.update(baked_popen_args or {})
-        cfg.update(kwargs)
+        out = result.stdout if which == STDOUT else result.stderr
+        if isinstance(out, (str, bytes)):
+            return out.splitlines()
 
-        keywords = {}
-        kw_args = {}
-        call_args = {}
-        popen_args = {}
-        for key, val in list(cfg.items()):
-            # if the package is used in R reticulate
-            # use .hold instead of _hold
-            if key and key[0] == '.':
-                right_key = '_' + key[1:]
-                cfg[right_key] = cfg.pop(key)
-                key = right_key
+        return list(out)
 
-            if key in _Utils.kw_arg_keys:
-                kw_args[key] = val
-            elif key in _Utils.call_arg_keys:
-                call_args[key] = val
-            elif key in _Utils.popen_arg_keys:
-                popen_args[key] = val
+    def __init__(self, result):
+        if isinstance(result, (_Diot, CmdyResult)):
+            msgs = [f'Unexpected RETURN CODE {result.rc}, '
+                    f'expecting: {result.holding.okcode}',
+                    '',
+                    f'  [   PID] {result.pid}',
+                    '',
+                    f'  [   CMD] {result.cmd}',
+                    '']
+
+            if result.stdout is None:
+                msgs.append('  [STDOUT] <NA / ITERATED / REDIRECTED>')
+                msgs.append('')
             else:
-                keywords[key] = val
+                outs = CmdyReturnCodeError._out_nowait(result, STDOUT) or ['']
+                msgs.append(f'  [STDOUT] {outs.pop().rstrip()}')
+                msgs.extend(f'           {out}' for out in outs[:31])
+                if len(outs) > 31:
+                    msgs.append(f'           [{len(outs)-31} lines hidden.]')
+                msgs.append('')
 
-        naked_cmds = []
-        for arg in args:
-            if isinstance(arg, dict):
-                kwargs = kw_args.copy()
-                kwargs.update(
-                    {k: arg.pop(k)
-                     for k in _Utils.kw_arg_keys if k in arg})
-                naked_cmds.append(_Utils.parse_kwargs(arg, kwargs))
+            if result.stderr is None:
+                msgs.append('  [STDERR] <NA / ITERATED / REDIRECTED>')
+                msgs.append('')
             else:
-                naked_cmds.append(_shquote(str(arg)))
-
-        for arg1, arg2, msg in _Utils.call_arg_validators:
-            if call_args.get(arg1) and call_args.get(arg2):
-                raise ValueError(msg)
-
-        return ' '.join(naked_cmds), keywords, kw_args, call_args, popen_args
-
-    @staticmethod
-    def parse_kwargs(kwargs, conf, checkraw=False):
-        """Parse kwargs"""
-        positional0 = kwargs.pop('', [])
-        if not isinstance(positional0, (tuple, list)):
-            positional0 = [positional0]
-        positional1 = kwargs.pop('_', [])
-        if not isinstance(positional1, (tuple, list)):
-            positional1 = [positional1]
-
-        ret = [_shquote(str(pos0)) for pos0 in positional0]
-        kwkeys = kwargs.keys() if isinstance(kwargs, OrderedDict) else sorted(
-            kwargs.keys())
-        for key in kwkeys:
-            val = kwargs[key]
-            prefix = conf['_prefix']
-            if prefix == 'auto':
-                prefix = '-' if len(key) == 1 else '--'
-
-            sep = conf['_sep']
-            if sep == 'auto':
-                sep = ' ' if len(key) == 1 else '='
-
-            if checkraw and not conf['_raw']:
-                key = key.replace('_', '-')
-
-            if isinstance(val, bool):
-                if not val:
-                    continue
-                ret.append('{prefix}{key}'.format(prefix=prefix, key=key))
-            elif isinstance(val, (tuple, list)):
-                if not conf['_dupkey']:
-                    ret.append('{prefix}{key}{sep}{vals}'.format(
-                        prefix=prefix,
-                        key=key,
-                        sep=sep,
-                        vals=' '.join(_shquote(str(v)) for v in val)))
-                else:
-                    ret.extend('{prefix}{key}{sep}{v}'.format(
-                        prefix=prefix, key=key, sep=sep, v=_shquote(str(v)))
-                               for v in val)
-            else:
-                ret.append('{prefix}{key}{sep}{val}'.format(prefix=prefix,
-                                                            key=key,
-                                                            sep=sep,
-                                                            val=_shquote(
-                                                                str(val))))
-
-        ret.extend(_shquote(str(pos1)) for pos1 in positional1)
-
-        return ' '.join(ret)
-
-
-class _Valuable:
-
-    STR_METHODS = ('capitalize', 'center', 'count', 'decode', 'encode',
-                   'endswith', 'expandtabs', 'find', 'format', 'index',
-                   'isalnum', 'isalpha', 'isdigit', 'islower', 'isspace',
-                   'istitle', 'isupper', 'join', 'ljust', 'lower', 'lstrip',
-                   'partition', 'replace', 'rfind', 'rindex', 'rjust',
-                   'rpartition', 'rsplit', 'rstrip', 'split', 'splitlines',
-                   'startswith', 'strip', 'swapcase', 'title', 'translate',
-                   'upper', 'zfill')
-
-    def __str__(self):
-        return str(self.value)
-
-    def str(self):
-        """Get stringified value"""
-        return str(self.value)
-
-    def int(self, raise_exc=True):
-        """Get int value"""
-        try:
-            return int(self.value)
-        except Exception:
-            if raise_exc:
-                raise
-            return None
-
-    def float(self, raise_exc=True):
-        """Get float value"""
-        try:
-            return float(self.value)
-        except Exception:
-            if raise_exc:
-                raise
-            return None
-
-    def __getattr__(self, item):
-        # attach str methods
-        if item in _Valuable.STR_METHODS:
-            return getattr(str(self.value), item)
-        raise AttributeError('No such attribute: {}'.format(item))
-
-    def __add__(self, other):
-        try:
-            return self.value + other
-        except TypeError:
-            return str(self.value) + other
-
-    def __contains__(self, other):
-        try:
-            return other in self.value
-        except TypeError:
-            return other in str(self.value)
-
-    def __eq__(self, other):
-        try:
-            return self.value == other
-        except TypeError:  # pragma: no cover
-            return str(self.value) == other
-
-    def __ne__(self, other):
-        return not self.__eq__(other)
-
-
-config = Config()  # pylint: disable=invalid-name
-config._load(dict(default=_Utils.default_config), '~/.cmdy.ini', './.cmdy.ini',
-             'CMDY.osenv')
-
-
-class Cmdy:
-    """The main class to handle the command"""
-    def __init__(self, # pylint: disable=too-many-arguments
-                 exe,
-                 cmd='',
-                 keywords=None,
-                 kw_args=None,
-                 call_args=None,
-                 popen_args=None):
-        self._exe = exe
-        self._cmd = cmd
-        self.keywords = keywords or {}
-        self.kw_args = kw_args or {}
-        self.call_args = call_args or {}
-        self.popen_args = popen_args or {}
-
-    def __call__(self, *args, **kwargs):
-        naked_cmd, keywords, kw_args, call_args, popen_args = _Utils.parse_args(
-            self._exe, args, kwargs, self.keywords, self.kw_args,
-            self.call_args, self.popen_args)
-
-        if call_args.pop('_bake', False):
-            return self.__class__(call_args.get('_exe', self._exe)
-                                  or self._exe,
-                                  ' '.join(filter(None,
-                                                  [self._cmd, naked_cmd])),
-                                  keywords=keywords,
-                                  kw_args=kw_args,
-                                  call_args=call_args,
-                                  popen_args=popen_args)
-        exe = call_args.get('_exe', self._exe) or self._exe
-        self._exe = exe
-        cmd_parts = [
-            _shquote(exe), self._cmd, naked_cmd,
-            _Utils.parse_kwargs(keywords, kw_args, True)
-        ]
-        cmd = ' '.join(filter(None, cmd_parts))
-        return CmdyResult(cmd, call_args, popen_args)
-
-    def bake(self, *args, **kwargs):
-        """Bake the instance"""
-        kwargs['_bake'] = True
-        return self(*args, **kwargs)
-
-    def __getattr__(self, subcmd):
-        return self.__class__(self._exe,
-                              ' '.join(filter(None, [self._cmd, subcmd])))
-
-
-class CmdyTimeoutException(Exception):
-    """Exception when the command exceeds the allowed time"""
-    def __init__(self, cmdy):
-        if isinstance(cmdy, CmdyResult):
-            msg = 'Command not finished in %s second(s).\n\n' % cmdy.call_args[
-                '_timeout']
-            msg += '  [PID] %s' % cmdy.pid
-            msg += '\n'
-            msg += '  [CMD] %s' % cmdy.cmd
-            msg += '\n'
+                errs = CmdyReturnCodeError._out_nowait(result, STDERR) or ['']
+                msgs.append(f'  [STDERR] {errs.pop().rstrip()}')
+                msgs.extend(f'           {err}' for err in errs[:31])
+                if len(errs) > 31:
+                    msgs.append(f'           [{len(errs)-31} lines hidden.]')
+                msgs.append('')
         else: # pragma: no cover
-            msg = str(cmdy)
-        super().__init__(msg)
+            msgs = [str(result)]
+        super().__init__('\n'.join(msgs))
 
+async def _cmdy_raise_return_code_error(aresult):
+    """Raise CmdyReturnCodeError from CmdyAsyncResult
+    Compose a fake CmdyResult for CmdyReturnCodeError
+    """
+    # this should be
+    result = _Diot(rc=aresult._rc,
+                   pid=aresult.pid,
+                   cmd=aresult.cmd,
+                   holding=_Diot(okcode=aresult.holding.okcode),
+                   _stdout_str=(await aresult.stdout.read()
+                                if aresult.stdout else ''),
+                   _stderr_str=(await aresult.stderr.read()
+                                if aresult.stderr else ''),
+                   stdout=aresult.stdout,
+                   stderr=aresult.stderr)
 
-class CmdyReturnCodeException(Exception):
-    """Exception with unexpected return code"""
-    def __init__(self, cmdy):
-        if isinstance(cmdy, CmdyResult):
-            msg = 'Unexpected RETURN CODE %s, expecting: %s\n' % (
-                cmdy.rc, cmdy.call_args['_okcode'])
-            msg += '\n'
-            msg += '  [PID] %s\n' % (cmdy.pid
-                                     if cmdy.pid and cmdy.rc != -1
-                                     else 'Not launched.')
-            msg += '\n'
-            msg += '  [CMD] %s\n' % cmdy.cmd
-            msg += '\n'
-            msg += '  [CALL_ARGS] %s\n' % cmdy.call_args
-            msg += '\n'
-            msg += '  [POPEN_ARGS] %s\n' % cmdy.popen_args
-            msg += '\n'
-            if cmdy.call_args['_iter'] in (
-                    'out', True) or not cmdy.p or not cmdy.p.stdout:
-                msg += '  [STDOUT] <ITERRATED / REDIRECTED>\n'
-            else:
-                outs = cmdy.stdout.splitlines()
-                msg += '  [STDOUT] %s\n' % (outs.pop().rstrip('\n')
-                                            if outs else '')
-                for out in outs[:31]:
-                    msg += '           %s\n' % out.rstrip('\n')
-                if len(outs) > 32:
-                    msg += '           [%s line(s) hidden.]\n' % (len(outs)-32)
-            msg += '\n'
+    raise CmdyReturnCodeError(result)
 
-            if (cmdy.call_args['_iter'] == 'err' or
-                    not cmdy.p or
-                    not cmdy.p.stderr):
-                msg += '  [STDERR] <ITERRATED / REDIRECTED>\n'
-            else:
-                errs = cmdy.stderr.splitlines()
-                msg += '  [STDERR] %s\n' % (errs.pop().rstrip('\n')
-                                            if errs else '')
-                for err in errs[:31]:
-                    msg += '           %s\n' % err.rstrip()
-                if len(errs) > 32:
-                    msg += '           [%s line(s) hidden.]\n' % (len(errs)-32)
-            msg += '\n'
-        else: # pragma: no cover
-            msg = str(cmdy)
-        super().__init__(msg)
+# not for external use
+class _CmdySyncStreamFromAsync:
+    """Take an async iterable into a sync iterable
+    We use _curio.run to fetch next record each time
+    A StopIteration raised when a StopAsyncIteration raises
+    for the async iterable
+    """
+    def __init__(self, astream: _curio.io.FileStream,
+                 encoding: str = None):
+        self.astream = astream
+        self.encoding = encoding
 
-
-class CmdyResult(_Valuable): # pylint: disable=too-many-instance-attributes
-    """The result of a command"""
-
-    def __init__(self, cmd, call_args, popen_args):
-        # pylint: disable=too-many-statements,too-many-branches
-        self.logger = logging.getLogger(__name__)
-        self._init_logger()
-
-        self.done = False
-        self.p = None # pylint: disable=invalid-name
-        self.popen_args = {key[1:]: val for key, val in popen_args.items()}
-        self.call_args = call_args
-        self.should_wait = True
-        self.should_run = True
-        self.rc = 0
-        self.pid = 0
-        self.cmd = cmd
-        self.iterq = Queue()
-        self._stdout = ''
-        self._stderr = ''
-        self._piped = None
-
-        okcode = self.call_args['_okcode']
-        if isinstance(okcode, int):
-            okcode = [okcode]
-        elif not isinstance(okcode, list):
-            okcode_items = okcode.split(',')
-            okcode = []
-            for key in okcode_items:
-                if '~' in key:
-                    start, end = key.strip().split('~', 1)
-                    okcode.extend(range(int(start), int(end) + 1))
-                else:
-                    okcode.append(key)
-
-        self.call_args['_okcode'] = [key
-                                     if isinstance(key, int)
-                                     else int(key.strip())
-                                     for key in okcode]
-
-        # put the arguments in right type
-        self.call_args['_timeout'] = float(self.call_args['_timeout'])
-        for key in ('_dupkey', '_hold', '_debug', '_raise', '_bake', '_pipe',
-                    '_raw', '_fg'):
-            if not key in self.call_args or isinstance(self.call_args[key],
-                                                       bool):
-                continue
-            self.call_args[key] = self.call_args[key] in ('True', 'TRUE', 'T',
-                                                          't', 'true', 1, '1')
-
-        if call_args['_fg']:
-            self.popen_args['stdout'] = sys.stdout
-            self.popen_args['stderr'] = sys.stderr
+    async def _fetch_next(self, timeout: float = None):
+        await self.astream.flush()
+        if timeout:
+            ret = await _curio.timeout_after(timeout, self.astream.__anext__)
         else:
-            _out = call_args.get('_out')
-            _out_ = call_args.get('_out_')
-            _err = call_args.get('_err')
-            _err_ = call_args.get('_err_')
+            ret = await self.astream.__anext__()
+        return ret.decode(self.encoding) if self.encoding else ret
 
-            outpipe = self.popen_args.get('stdout', subprocess.PIPE)
-            errpipe = self.popen_args.get('stderr',
-                                          # redirect/merge stderr to stdout
-                                          # if _iter is True
-                                          subprocess.STDOUT
-                                          if self.call_args['_iter'] is True
-                                          else subprocess.PIPE)
-
-            if not _out and not _out_:
-                self.popen_args['stdout'] = outpipe
-            elif _out == '>':
-                self.popen_args['stdout'] = outpipe
-                self.call_args['_iter'] = 'out'
-            elif _out:
-                self.popen_args['stdout'] = open(_out, 'w')
-            else:  #elif _out_:
-                self.popen_args['stdout'] = open(_out_, 'a')
-
-            if not _err and not _err_:
-                self.popen_args['stderr'] = errpipe
-            elif _err == '>':
-                self.popen_args['stderr'] = errpipe
-                self.call_args['_iter'] = 'err'
-            elif _err:
-                self.popen_args['stderr'] = open(_err, 'w')
-            else:  #if _err_:
-                self.popen_args['stderr'] = open(_err_, 'a')
-
-        if self.call_args['_debug']:
-            self.logger.setLevel('DEBUG')
-        else:
-            self.logger.setLevel('INFO')
-
-        self.logger.debug('%s START %s', '=' * 31, '=' * 31)
-        self.logger.debug('call_args: %s', self.call_args)
-        self.logger.debug('popen_args: %s', self.popen_args)
-
-        if _Utils.get_piped() or self.call_args['_hold']:
-            self.logger.debug('Command is piped or held, will be be running.')
-            self.should_run = False
-
-        if call_args['_pipe']:
-            _Utils.get_piped().append(self)
-            self.should_wait = False
-            self.should_run = False
-
-        self._fix_popen_env()
-        if self.should_run:
-            self.run()
-
-    def _init_logger(self):
-        if not self.logger.handlers:
-            handler = logging.StreamHandler()
-            handler.setFormatter(
-                logging.Formatter('[%(asctime)-15s %(levelname)5s]'
-                                  '[%(name)s][%(thread)d] %(message)s')
-            )
-            self.logger.addHandler(handler)
-
-    def _fix_popen_env(self):
-        if 'env' not in self.popen_args or not self.popen_args['env']:
-            return
-        self.logger.debug('Try to update environment.')
-        update = self.popen_args['env'].pop('_update', True)
-        if not update:
-            return
-        env = os.environ.copy()
-        env.update(
-            {key: str(val)
-             for key, val in self.popen_args['env'].items()})
-        self.popen_args['env'] = env
-        self.logger.debug('Env: %s', env)
-
-    def __del__(self):
-        #if self.call_args['_fg']: # don't close sys.stdout and sys.stderr
-        #	return
-        if not self.popen_args['stdout'] is sys.stdout:
-            if self.p and self.p.stdout:
-                if hasattr(self.p.stdout, 'close') and callable(
-                        self.p.stdout.close):
-                    self.p.stdout.close()
-            if (self.popen_args['stdout']
-                    and hasattr(self.popen_args['stdout'], 'close')
-                    and callable(self.popen_args['stdout'].close)):
-                self.popen_args['stdout'].close()
-        if not self.popen_args['stderr'] is sys.stderr:
-            if self.p and self.p.stderr:
-                if hasattr(self.p.stderr, 'close') and callable(
-                        self.p.stderr.close):
-                    self.p.stderr.close()
-            if (self.popen_args['stderr']
-                    and hasattr(self.popen_args['stderr'], 'close')
-                    and callable(self.popen_args['stderr'].close)):
-                self.popen_args['stderr'].close()
-
-    def reset(self):
-        """Reset the status"""
-        self.done = False
-        self.p = None
-        self.should_wait = True
-        self.should_run = True
-        self.rc = 0
-        self._stdout = ''
-        self._stderr = ''
-
-    def run(self):
-        """Run the command"""
-        self.logger.debug('Start to run the command.')
-        if self.done:
-            self.logger.debug('Command is done, using previous results.')
-            return
-
-        self.done = True
-        if self._piped is not None:
-            self.logger.debug('Using piped stdin.')
-            self._piped.run()
-            self.popen_args['stdin'] = self._piped.p.stdout
-        self.logger.debug('Running: %s', self.cmd)
-        self.p = subprocess.Popen(self.cmd, shell=True, **self.popen_args)
-        self.pid = self.p.pid
-        if self.should_wait:
-            self.logger.debug('Waiting for the command to be done ...')
-            self._wait()
-
-    def post_handling(self):
+    def next(self, timeout: float = None):
+        """Fetch the next record within give timeout
+        If nothing produced after the timeout, returns empty str or bytes
         """
-        Deal with stuff after jobs being submitted
-        """
-        time0 = time.time()
-        while True:
-            # _iter, _bg, _timeout
-            if self.call_args['_iter']:
-                linefd = (self.p.stdout,
-                          self.p.stderr)[int(self.call_args['_iter'] == 'err')]
-                line = linefd.readline() if linefd else None
-                if line:
-                    self.iterq.put(line)
-                elif self.p.poll() is not None:
-                    break
-                time.sleep(.1)
-                if (self.call_args['_timeout']
-                        and time.time() - time0 > self.call_args['_timeout']):
-                    self.p.terminate()
-                    # to eliminate ResourceWarning from python3
-                    self.p.wait()
-                    self.iterq.put(None)
-                    raise CmdyTimeoutException(self)
-            elif self.call_args['_timeout']:
-                if self.p.poll() is not None:
-                    break
-                time.sleep(.1)
-                if time.time() - time0 > self.call_args['_timeout']:
-                    self.p.terminate()
-                    # to eliminate ResourceWarning from python3
-                    self.p.wait()
-                    raise CmdyTimeoutException(self)
-            else:
-                break
-
-        if self.call_args['_iter']:
-            self.iterq.put(None)
-
-        # wait for all _piped, to eliminate ResourceWarning from python3
-        piped = self._piped
-        while piped is not None:
-            piped.rc = piped.p.wait()
-            piped.raise_rc()
-            piped = piped._piped
-
-        self.rc = self.p.wait()
-        self.raise_rc()
-
-        if callable(self.call_args['_bg']):
-            self.call_args['_bg'](self)
-
-    def post_handling_bg(self):
-        """Post handling background command"""
-        thr = threading.Thread(target=self.post_handling)
-        thr.daemon = True
-        thr.start()
-
-    def raise_rc(self):
-        """Raise with a return code"""
-        if not self.call_args['_raise'] or self.rc in self.call_args['_okcode']:
-            return
-        raise CmdyReturnCodeException(self)
-
-    def wait(self):
-        """
-        Function for user to call
-        """
-        self.rc = self.p.wait() if self.p else -1
-        self.raise_rc()
-
-    def _wait(self):
-        if not self.p:
-            self.rc = -1
-            self.raise_rc()
-        elif self.call_args['_fg']:
-            self.rc = self.p.wait()
-            self.raise_rc()
-        elif self.call_args['_bg'] or self.call_args['_iter']:
-            self.logger.debug('Command running in background now.')
-            self.post_handling_bg()
-        else:
-            self.post_handling()
-
-    def next(self, timeout=None):
-        """Get next line of output stream"""
-        if not self.done:
-            raise RuntimeError('Command not started to run yet.')
-        if not self.p:
-            raise RuntimeError('Failed to open a process.')
-        if self.call_args['_iter'] == 'err' and not self.p.stderr:
-            raise RuntimeError('No stderr captured, may be redirected.')
-        if self.call_args['_iter'] in (True, 'out') and not self.p.stdout:
-            raise RuntimeError('No stdout captured, may be redirected.')
-        if not self.call_args['_iter']:
-            raise RuntimeError(
-                'CmdyResult is not iterrable with _iter = False.')
-
         try:
-            item = self.iterq.get(timeout=timeout)
-        except QueueEmpty:
-            return None
-        if item is None:
+            return _curio.run(self._fetch_next(timeout))
+        except StopAsyncIteration:
             raise StopIteration()
-        return item
+        except _curio.TaskTimeout:
+            return '' if self.encoding else b''
 
-    __next__ = next
+    def __next__(self):
+        return self.next()
 
     def __iter__(self):
         return self
 
+    def dump(self):
+        """Dump all records as a string or bytes"""
+        return ('' if self.encoding else b'').join(self)
+
+def _cmdy_parse_args(name: str, args: tuple, kwargs: dict):
+    """Get parse whatever passed to cmdy.ls()
+
+    Example:
+        ```python
+        parse_args("a", "--l=a", {'x': True}, cmdy_pipe=True,
+                   popen_encoding='utf-8')
+        # gives:
+        # ["a", "--l=a"], {"x": True}, {"pipe": True}, {"encoding": 'utf-8'}
+        ```
+
+    Args:
+        args (tuple): The arugments passed to `cmdy.ls(...)`
+        kwargs (dict): The kwargs passed to `cmdy.ls(...)`
+    """
+    ret_args: list = []
+    ret_kwargs: dict = {}
+    ret_cfgargs: _Diot = _Diot()
+    ret_popenargs: _Diot = _Diot()
+
+    base_kwargs = CMDY_CONFIG._use(name, 'default', copy=True)
+    base_kwargs.update(_CMDY_BACKED_ARGS)
+    base_kwargs.update(kwargs)
+
+    for key, val in base_kwargs.items():
+        if key.startswith('popen_'):
+            ret_popenargs[key[6:]] = val
+        elif key.startswith('cmdy_'):
+            ret_cfgargs[key[5:]] = val
+        elif val is not False:
+            ret_kwargs[key] = val
+
+    for arg in args:
+        if isinstance(arg, dict):
+            for key, val in arg.items():
+                if key in ret_kwargs:
+                    _warnings.warn(f"Argument {key} has been specified "
+                                   "in both *args and **kwargs. "
+                                   "The one in *args will be ignored.",
+                                   UserWarning)
+                    continue
+                if val is not False:
+                    ret_kwargs[key] = val
+        else:
+            ret_args.append(str(arg))
+
+    for pipe in ('stdin', 'stdout', 'stderr'):
+        if pipe in ret_popenargs:
+            _warnings.warn("Motifying pipes are not allowed. "
+                           "Values will be ignored")
+            del ret_popenargs[pipe]
+
+    if 'encoding' in ret_popenargs:
+        _warnings.warn("Please use cmdy_encoding instead of popen_encoding.")
+
+    if 'shell' in ret_popenargs:
+        _warnings.warn("To change the shell mode, use cmdy_shell instead.")
+        del ret_popenargs.shell
+
+    if isinstance(ret_cfgargs.okcode, str):
+        ret_cfgargs.okcode = [okc.strip()
+                              for okc in ret_cfgargs.okcode.split(',')]
+    if not isinstance(ret_cfgargs.okcode, list):
+        ret_cfgargs.okcode = [ret_cfgargs.okcode]
+    ret_cfgargs.okcode = [int(okc) for okc in ret_cfgargs.okcode]
+
+    if ret_cfgargs.shell:
+        if ret_cfgargs.shell is True:
+            ret_cfgargs.shell = ['/bin/bash', '-c']
+        if not isinstance(ret_cfgargs.shell, list):
+            ret_cfgargs.shell = [ret_cfgargs.shell, '-c']
+        elif len(ret_cfgargs.shell) == 1:
+            ret_cfgargs.shell.append('-c')
+
+    return ret_args, ret_kwargs, ret_cfgargs, ret_popenargs
+
+def _cmdy_will(stack=2) -> str:
+    """Foresee the attribute or member being called right after `cmdy.ls()`
+    This should be call only in `Cmdy.__call__`
+    This allows us to do next actions include piping and redirecting and
+    hold current command to run.
+
+    Example:
+        ```python
+        cmdy.ls().pipe     # gives pipe
+        cmdy.ls().pipe()   # also allowed
+        cmdy.ls().redirect # redirect
+        # commands ls is not running until next actions followed:
+        cmdy.ls().pipe | cmdy.cat()
+        ```
+    """
+    frame = _inspect.stack()[stack].frame
+    source = _executing.Source.executing(frame)
+    try:
+        node = source.node
+        assert isinstance(node, _ast.Call), ("Invalid use of function `will`")
+        node = node.parent
+    except (AssertionError, AttributeError):
+        return None
+
+    if not isinstance(node, _ast.Attribute):
+        return None
+
+    return node.attr
+
+def _cmdy_compose_cmd(args: list, kwargs: dict, *,
+                      shell: list, prefix: str,
+                      sep: str, dupkey: bool) -> list:
+    """Compose the command for Popen"""
+    command = args[:]
+
+    precedings = kwargs.pop('', [])
+    command.extend(precedings if isinstance(precedings, list) else [precedings])
+
+    positionals = kwargs.pop('_', [])
+
+    for key, value in kwargs.items():
+        pref = prefix if prefix != 'auto' else '-' if len(key) == 1 else '--'
+        separator = sep if sep != 'auto' else ' ' if len(key) == 1 else '='
+        if not isinstance(value, list):
+            value = [value]
+
+        for i, val in enumerate(value):
+            if separator == ' ':
+                if i == 0 or dupkey:
+                    command.append(f'{pref}{key}')
+                if val is not True:
+                    command.append(str(val))
+            else:
+                if i == 0 or dupkey:
+                    command.append(f'{pref}{key}{separator}{val}')
+                elif val is not True:
+                    command.append(str(val))
+
+    command.extend(positionals if isinstance(positionals, list)
+                   else [positionals])
+
+    if shell:
+        return shell + [' '.join(command)]
+    return command
+
+class Cmdy:
+    """Cmdy class
+    It's just a bridge for doing cmdy.ls -> cmdy.ls()
+    """
+
+    def __init__(self, name: str,
+                 args: list = None,
+                 kwargs: dict = None,
+                 cfgargs: _Diot = None,
+                 popenargs: _Diot = None):
+        """Initialize Cmdy object
+
+        Args:
+            name (str): The command name. (The `ls` in `cmdy.ls()`)
+                This is the only required arguments. Other arguments below
+                should be baking arguments, which will be used as base for
+                futher command call.
+            args (list): The non-keyword arguments, including subcommands
+            kwargs (dict): The keyword arguments
+            cfgargs (_Diot): The configuration arguments, starting with `cmdy_`
+            popenargs (_Diot): The arguments for `subprocess.Popen`
+
+        """
+        self._name: str = name # should be not changed later on
+        # cmdy.ls("/path/to")
+        self._args: list = args or []
+        # cmdy.ls(l="/path/to")
+        self._kwargs: dict = kwargs or {}
+        # cmdy.ls(cmdy_prefix="-", l=...)
+        self._cfgargs: _Diot = cfgargs
+        # cmdy.ls(cmdy_stdin="/dev/stdin")
+        self._popenargs: _Diot = popenargs
+
+    def __call__(self, *args, **kwargs):
+        _args, _kwargs, _cfgargs, _popenargs = _cmdy_parse_args(
+            self._name, args, kwargs
+        )
+
+        ready_args = (self._args or []) + _args
+        ready_kwargs = self._kwargs.copy() if self._kwargs else {}
+        ready_kwargs.update(_kwargs)
+        ready_cfgargs = self._cfgargs.copy() if self._cfgargs else _Diot()
+        ready_cfgargs.update(_cfgargs)
+        ready_popenargs = self._popenargs.copy() if self._popenargs else _Diot()
+        ready_popenargs.update(_popenargs)
+
+        # update the executable
+        exe = ready_cfgargs.pop('exe', None) or self._name
+
+        will = _cmdy_will()
+        if will == 'bake':
+            if args:
+                raise CmdyBakingError('Must bake from keyword arguments.')
+            return self.__class__(self._name, ready_args, ready_kwargs,
+                                  ready_cfgargs, ready_popenargs)
+
+        # Let CmdyHolding handle the result
+        return CmdyHolding([exe] + ready_args, ready_kwargs,
+                           ready_cfgargs, ready_popenargs, will)
+
+    def bake(self):
+        """Already done in __call__"""
+        return self
+
+    def __getattr__(self, name):
+        self._args.append(name)
+        return self
+
+    b = bake
+
+class CmdyHolding:
+    """Command not running yet"""
+    def __new__(cls, # pylint: disable=too-many-function-args
+                args: list,
+                kwargs: dict,
+                cfgargs: _Diot,
+                popenargs: _Diot,
+                will: str = None):
+
+        holding = super().__new__(cls)
+
+        # Use the _onhold function, but fake an object
+        if cls._onhold(_Diot(
+                data=_Diot(hold=False),
+                did='',
+                will=will
+        )):
+            # __init__ automatically called
+            return holding
+
+        holding.__init__(args, kwargs, cfgargs, popenargs, will)
+        result = holding.run()
+
+        if not will:
+            return result.wait()
+
+        return result
+
+    def __init__(self, args, kwargs, cfgargs, popenargs, will):
+        # Attach the global EVENT here for later access
+
+        # remember this for resetting
+        self._reset_async = cfgargs['async']
+        self.shell = cfgargs.shell
+        self.encoding = cfgargs.encoding
+        self.okcode = cfgargs.okcode
+        self.timeout = cfgargs.timeout
+        self.raise_ = cfgargs['raise']
+        self.should_close_fds = _Diot()
+        # Should I wait for the results, or just run asyncronouslly
+        # This should be controlled by plugins
+        # to communicate between each other
+        # This only works in sync mode
+        self.should_wait = False
+        self.did = self.curr = ''
+        self.will = will
+
+
+        # pipes
+        self.stdin = _subprocess.PIPE
+        self.stdout = _subprocess.PIPE
+        self.stderr = _subprocess.PIPE
+
+        popenargs.shell = False
+
+        self.popenargs = popenargs
+        # data carried by actions (ie redirect, pipe, etc)
+        self.data = _Diot({'async': cfgargs['async'], 'hold': False})
+        self.cmd = _cmdy_compose_cmd(args, kwargs, shell=self.shell,
+                                     prefix=cfgargs.prefix,
+                                     sep=cfgargs.sep,
+                                     dupkey=cfgargs.dupkey)
+
+    def __repr__(self):
+        return f"<CmdyHolding: {self.cmd}>"
+
+    def reset(self):
+        """Reset the holding object for reuse"""
+        # pipes
+        self.stdin = _subprocess.PIPE
+        self.stdout = _subprocess.PIPE
+        self.stderr = _subprocess.PIPE
+        self.did = self.curr = self.will = ''
+
+        self.should_close_fds = _Diot()
+        self.data = _Diot({'async': self._reset_async, 'hold': False})
+        return self
+
+    @property
+    def strcmd(self):
+        """Get the stringified cmd"""
+        return ' '.join(_quote(cmdpart) for cmdpart in self.cmd)
+
+    def _run(self):
+        try:
+            return _subprocess.Popen(
+                self.cmd,
+                stdin=self.stdin,
+                stdout=self.stdout,
+                stderr=self.stderr,
+                **self.popenargs
+            )
+        except FileNotFoundError as fnfe:
+            raise CmdyExecNotFoundError(str(fnfe)) from None
+
+    def _onhold(self, check_event=True):
+        """Tell if I am on hold
+        We should be on hold to run if:
+        1. EVENT is set. This means that there are unconsumed pipes
+        2. The world is on hold if `.h()` or `.hold()` is called earlier
+        3. If a holding-left action will be taken
+        4. If a holding-right action was taken
+
+        Args:
+            check_event (bool): Should we check if event is set as well?
+                                We should ignore it if we are consuming a piping
+        """
+        return ((check_event and _CMDY_EVENT.is_set()) or
+                self.data.hold or
+                self.will in _CMDY_HOLDING_LEFT or
+                self.did in _CMDY_HOLDING_RIGHT)
+
+    def async_(self):
+        """Put command in async mode"""
+        if self.data['async']:
+            raise CmdyActionError("Already in async mode.")
+
+        self.data['async'] = True
+        # update actions
+        self.did, self.curr, self.will = self.curr, self.will, _cmdy_will()
+
+        if self._onhold():
+            return self
+        return self.run()
+
+    a = async_
+
+    def hold(self):
+        """Put the command on hold"""
+        # Whever hold is called
+        self.data['hold'] = True
+        if self.data['async'] or len(self.data) > 2:
+            raise CmdyActionError("Should be called in "
+                                  "the first place: .h() or .hold()")
+        return self
+
+    h = hold
+
+    def run(self, wait=None):
+        """Run the command"""
+        if wait is None:
+            wait = self.should_wait
+        if not self.data['async']:
+            ret = CmdyResult(self._run(), self)
+            if wait:
+                return ret.wait()
+            return ret
+        return CmdyAsyncResult(self._run(), self)
+
+class CmdyResult:
+
+    """Sync version of result"""
+
+    def __init__(self, proc, holding):
+        self.proc = proc
+        self.holding = holding
+        self.did = self.curr = ''
+        self.will = holding.will
+        self._stdout = None
+        self._stderr = None
+        self.data = _Diot()
+        self._rc = None
+
+    def __repr__(self):
+        return f"<CmdyResult: {self.cmd}>"
+
+    @property
+    def rc(self):
+        """Get the return code"""
+        if self._rc is not None:
+            return self._rc
+        self.wait()
+        return self._rc
+
+    @property
+    def pid(self):
+        """Get the pid of the process"""
+        return self.proc.pid
+
+    @property
+    def cmd(self):
+        """Get the stringified command"""
+        return self.holding.cmd
+
+    @property
+    def strcmd(self):
+        """Get the stringified cmd"""
+        return ' '.join(_quote(cmdpart) for cmdpart in self.cmd)
+
+    def wait(self):
+        """Wait until command is done
+        """
+        timeout = self.holding.timeout
+        try:
+            if timeout:
+                self._rc = _curio.run(
+                    _curio.timeout_after(timeout, self.proc.wait)
+                )
+            else:
+                self._rc = _curio.run(self.proc.wait())
+        except _curio.TaskTimeout:
+            raise CmdyTimeoutError(
+                f"Timeout after {self.holding.timeout} seconds."
+            ) from None
+        else:
+            if self._rc not in self.holding.okcode and self.holding.raise_:
+                raise CmdyReturnCodeError(self)
+            return self
+        finally:
+            self._close_fds()
+
+    def _close_fds(self):
+        if not self.holding.should_close_fds:
+            return
+        for filed in self.holding.should_close_fds.values():
+            if filed:
+                filed.close()
+
     @property
     def stdout(self):
-        """Get the stdout"""
-        if not self.done:
-            raise RuntimeError('Command not started to run yet.')
-        if self.call_args['_fg']:
-            return ''
-        if not self.p:
-            raise RuntimeError('Failed to open a process.')
-        if self.call_args['_bg'] and self.p.poll() is None:
-            raise RuntimeError('Background command has not finished yet.')
-        if not self.p.stdout:
-            raise RuntimeError('No stdout captured, may be redirected.')
-        if self.call_args['_iter'] in (True, 'out'):
-            return self
-        if not self._stdout:
-            self._stdout = self.p.stdout.read()
+        """The stdout of the command"""
+        if self.holding.stdout != _subprocess.PIPE:
+            # redirected, we are unable to fetch the stdout
+            return None
+
+        if self._stdout is not None:
+            return self._stdout
+
+        self._stdout = _CmdySyncStreamFromAsync(
+            self.proc.stdout,
+            encoding=self.holding.encoding
+        ).dump()
         return self._stdout
 
     @property
     def stderr(self):
-        """Get the stderr"""
-        if not self.done:
-            raise RuntimeError('Command not starts to run yet.')
-        if not self.p:
-            raise RuntimeError('Failed to open a process.')
-        if self.call_args['_bg'] and self.p.poll() is None:
-            raise RuntimeError('Background command has not finished yet.')
-        if not self.p.stderr:
-            raise RuntimeError('No stderr captured, may be redirected.')
-        if self.call_args['_iter'] == 'err':
-            return self
-        if not self._stderr:
-            self._stderr = self.p.stderr.read()
+        """The stderr of the command"""
+        if self.holding.stderr != _subprocess.PIPE:
+            # redirected, we are unable to fetch the stdout
+            return None
+
+        if self._stderr is not None:
+            return self._stderr
+        self._stderr = _CmdySyncStreamFromAsync(
+            self.proc.stderr,
+            encoding=self.holding.encoding
+        ).dump()
         return self._stderr
 
-    @property
-    def value(self):
-        """Get the value"""
-        return self.stdout if self.done else self.cmd
+class CmdyAsyncResult(CmdyResult):
+    """Asyncronous result"""
 
     def __repr__(self):
-        return str(self)
+        return f"<CmdyAsyncResult: {self.cmd}>"
 
-    def __bool__(self):
-        return self.rc == 0
+    async def _close_fds(self):
+        if not self.holding.should_close_fds:
+            return
+        try:
+            for filed in self.holding.should_close_fds.values():
+                if filed:
+                    coro = filed.close()
+                    if _inspect.iscoroutine(coro):
+                        await coro # pragma: no cover
+        except AttributeError: # pragma: no cover
+            pass
 
-    def __or__(self, other):
-        assert self.popen_args['stdout'] is subprocess.PIPE
-        assert self.call_args['_pipe'] is True
-        cmd = _Utils.get_piped().pop(0)
-        assert self is cmd
-        #other.popen_args['stdin'] = self.p.stdout
-        other._piped = self
-        if not other.call_args['_hold']:
-            other.run()
-        #self.p.wait()
-        return other
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        which = self.data.get('iter', {}).get('which', STDOUT)
+        stream = self.stdout if which == STDOUT else self.stderr
+        try:
+            line = await stream.__anext__()
+        except StopAsyncIteration:
+            await self.wait()
+            raise
+        if self.holding.encoding:
+            line = line.decode(self.holding.encoding)
+        return line
+
+    async def wait(self):
+        timeout = self.holding.timeout
+
+        try:
+            if timeout:
+                self._rc = await _curio.timeout_after(timeout, self.proc.wait)
+            else:
+                self._rc = await self.proc.wait()
+        except _curio.TaskTimeout:
+            raise CmdyTimeoutError("Timeout after "
+                                   f"{self.holding.timeout} seconds.")
+        else:
+            if self._rc not in self.holding.okcode and self.holding.raise_:
+                await _cmdy_raise_return_code_error(self)
+            return self
+        finally:
+            await self._close_fds()
 
     @property
-    def pipedcmd(self):
-        """Get the entire command with previous piped commands"""
-        if self._piped is None:
-            return self.cmd
-        return self._piped.cmd + ' | ' + self.cmd
+    async def rc(self):
+        if self._rc is not None:
+            return self._rc
+        await self.wait()
+        return self._rc
 
-    def __gt__(self, outfile):
-        assert self.call_args.get('_out') == '>' or self.call_args.get(
-            '_err') == '>'
-        with open(outfile, 'w') as fout:
-            for line in self:
-                fout.write(line)
+    @property
+    def stdout(self):
+        return self.proc.stdout
 
-    def __rshift__(self, outfile):
-        assert self.call_args.get('_out') == '>' or self.call_args.get(
-            '_err') == '>'
-        with open(outfile, 'a') as fout:
-            for line in self:
-                fout.write(line)
+    @property
+    def stderr(self):
+        return self.proc.stderr
+
+def _cmdy_hook_class(cls):
+    """Put hooks into the original class for extending"""
+    # store the functions with the same name
+    # that defined by different plugins
+    # Note that current (most recently added) is not in the stack
+    cls._plugin_stacks = {}
+
+    def _original(self, fname):
+        # callframe is oringally -1
+        frame = self._plugin_callframe.setdefault(fname, -1)
+        frame += 1
+        self._plugin_callframe[fname] = frame
+        return cls._plugin_stacks[fname][frame]
+    cls._original = _original
+
+    orig_init = cls.__init__
+    def __init__(self, *args, **kwargs):
+        self._plugin_callframe = {}
+        orig_init(self, *args, **kwargs)
+
+    cls.__init__ = __init__
+
+    if cls is CmdyHolding:
+        orig_reset = cls.reset
+        def reset(self, *args, **kwargs):
+            # clear the callframes as well
+            self._plugin_callframe = {}
+            orig_reset(self, *args, **kwargs)
+            return self
+
+        cls.reset = reset
+
+    # this is not a decorator, we don't return cls
+
+_cmdy_hook_class(CmdyHolding)
+_cmdy_hook_class(CmdyResult)
+# CmdyAsyncResult is a subclass of CmdyResult
+
+def cmdy_plugin(cls):
+    """A decorator to define a cmdy_plugin
+    A cmdy_plugin should be a class and methods should be decorated by the hooks
+    """
+    orig_init = cls.__init__
+    data = [val for val in cls.__dict__.values() if hasattr(val, 'enable')]
+
+    def __init__(self):
+        self.enabled = False
+        self.enable()
+        orig_init(self)
+
+    def enable(self):
+        for val in data:
+            val.enable()
+        self.enabled = True
+
+    def disable(self):
+        for val in data:
+            val.disable()
+        self.enabled = False
+
+    cls.enable = enable
+    cls.disable = disable
+    cls.__init__ = __init__
+    return cls
+
+def _cmdy_plugin_funcname(func):
+    funcname = func.__name__.rstrip('_')
+    if funcname.startswith('__'):
+        return funcname + '__'
+    return funcname
+
+def _cmdy_method_enable(cls, names, func):
+    for name in names:
+        # put original func into stack if any
+        stack = cls._plugin_stacks.setdefault(name, [])
+        orig_func = getattr(cls, name, None)
+
+        if orig_func:
+            stack.insert(0, orig_func)
+        setattr(cls, name, func)
+
+def _cmdy_method_disable(cls, names, func):
+    for name in names:
+        # remove the function from stack
+        # and restore the latest defined one
+        curr_func = getattr(cls, name)
+        if curr_func is func:
+            delattr(cls, name)
+
+        if func in cls._plugin_stacks[name]:
+            cls._plugin_stacks[name].remove(func)
+
+        if not hasattr(cls, name) and cls._plugin_stacks[name]:
+            setattr(cls, name, cls._plugin_stacks[name].pop(0))
+
+def _cmdy_property_enable(cls, names, func):
+    for name in names:
+        stack = cls._plugin_stacks.setdefault(name, [])
+        orig_prop = getattr(cls, name, None)
+        if orig_prop:
+            stack.insert(0, orig_prop)
+        setattr(cls, name, property(func))
+
+def _cmdy_property_disable(cls, names, func):
+    for name in names:
+        curr_prop = getattr(cls, name)
+        if curr_prop.fget is func:
+            delattr(cls, name)
+
+        cls._plugin_stacks[name] = [prop for prop in cls._plugin_stacks[name]
+                                    if prop.fget is not func]
+
+        if not hasattr(cls, name) and cls._plugin_stacks[name]:
+            setattr(cls, name, cls._plugin_stacks[name].pop(0))
+
+def plugin_add_method(cls):
+    """A decorator to add a method to a class"""
+    def decorator(func):
+        func.enable = lambda: _cmdy_method_enable(
+            cls, [_cmdy_plugin_funcname(func)], func
+        )
+        func.disable = lambda: _cmdy_method_disable(
+            cls, [_cmdy_plugin_funcname(func)], func
+        )
+        return func
+    return decorator
+
+def plugin_add_property(cls):
+    """A decorator to add a property to a class"""
+    def decorator(func):
+        func.enable = lambda: _cmdy_property_enable(
+            cls, [_cmdy_plugin_funcname(func)], func
+        )
+        func.disable = lambda: _cmdy_property_disable(
+            cls, [_cmdy_plugin_funcname(func)], func
+        )
+        return func
+    return decorator
+
+def _plugin_then(cls, func,  aliases=None, *,
+                 final: bool = False, hold_right: bool = False):
+    aliases = aliases or []
+    if not isinstance(aliases, list):
+        aliases = [alias.strip() for alias in aliases.split(',')]
+    aliases.insert(0, _cmdy_plugin_funcname(func))
+
+    finals = _CMDY_HOLDING_FINALS if cls is CmdyHolding else _CMDY_RESULT_FINALS
+    if final:
+        finals.extend(aliases)
+
+    @_wraps(func)
+    def wrapper(self, *args, **kwargs):
+        # Update actions
+        self.did, self.curr, self.will = self.curr, self.will, _cmdy_will()
+
+        if self.curr in finals and self.will:
+            raise CmdyActionError("Action taken after a final action.")
+        # Initialize data
+        # Make it True to tell future actions that I have been called
+        # Just in case some plugins forget to do this
+        self.data.setdefault(_cmdy_plugin_funcname(func), {})
+        return func(self, *args, **kwargs)
+
+    wrapper.enable = lambda: _cmdy_method_enable(cls, aliases, wrapper)
+    wrapper.disable = lambda: _cmdy_method_disable(cls, aliases, wrapper)
+
+    if cls is CmdyHolding:
+        _CMDY_HOLDING_LEFT.extend(aliases)
+        if hold_right:
+            _CMDY_HOLDING_RIGHT.extend(aliases)
+    return wrapper
+
+def plugin_hold_then(alias_or_func=None,
+                     *, final: bool = False,
+                     hold_right: bool = True):
+    """What to do if a command is holding
+
+    Args:
+        alias_or_func (str|list|Callable): Direct decorator or with kwargs
+        final (bool): If this is a final action
+        hold_right (bool): Tell previous actions that I should be on hold.
+                           But make sure running will be taken good care of.
+    """
+    aliases = None if callable(alias_or_func) else alias_or_func
+    func = alias_or_func if callable(alias_or_func) else None
+
+    if func:
+        return _plugin_then(CmdyHolding, func, aliases,
+                            final=final, hold_right=hold_right)
+
+    return lambda func: _plugin_then(CmdyHolding, func, aliases,
+                                     final=final, hold_right=hold_right)
+
+def plugin_run_then(alias_or_func=None, *, final: bool=False):
+    """What to do when a command is running"""
+    aliases = None if callable(alias_or_func) else alias_or_func
+    func = alias_or_func if callable(alias_or_func) else None
+
+    if func:
+        return _plugin_then(CmdyResult, func, aliases, final=final)
+
+    return lambda func: _plugin_then(CmdyResult, func, aliases, final=final)
+
+def plugin_run_then_async(alias_or_func):
+    """What to do when a command is running asyncronously"""
+    aliases = None if callable(alias_or_func) else alias_or_func
+    func = alias_or_func if callable(alias_or_func) else None
+
+    if func:
+        return _plugin_then(CmdyAsyncResult, func, aliases)
+
+    return lambda func: _plugin_then(CmdyAsyncResult, func, aliases)
+
+# pylint: disable=access-member-before-definition
+# pylint: disable=attribute-defined-outside-init
+
+@cmdy_plugin
+class CmdyPluginRedirect:
+    """Plugin: redirect
+    Redirect the in/out to somewhere else"""
+    def _redirect(self: CmdyHolding, which: list, append: bool,
+                  file) -> bool:
+        # add file-like type suport for file
+        if not self.data.get('redirect'):
+            raise CmdyActionError('Cannot redirect a non-redirecting command. '
+                                  'Did you forget to call '
+                                  '.r(), .redir() or .redirect()?')
+        curr_pipe = which.pop(0)
+        self.data.redirect.which = which
+
+        if curr_pipe == STDIN:
+            if isinstance(file, CmdyResult):
+                self.stdin = file.proc.stdout
+                self.should_close_fds.stdin = None
+            elif hasattr(file, 'read'):
+                self.stdin = file
+                self.should_close_fds.stdin = None
+            else:
+                self.stdin = open(file, 'r', encoding=self.encoding)
+                self.should_close_fds.stdin = self.stdin
+
+        elif curr_pipe == STDOUT:
+            if file == STDERR:
+                raise CmdyActionError("Cannot redirect STDOUT to STDERR.")
+            if hasattr(file, 'read'):
+                self.stdout = file
+                self.should_close_fds.stdout = None
+            else:
+                self.stdout = open(file, 'a' if append else 'w',
+                                   encoding=self.encoding)
+                self.should_close_fds.stdout = self.stdout
+        elif curr_pipe == STDERR:
+            if file == STDOUT:
+                self.stderr = STDOUT
+                self.should_close_fds.stderr = None
+            elif hasattr(file, 'read'):
+                self.stderr = file
+                self.should_close_fds.stderr = None
+            else:
+                self.stderr = open(file, 'a' if append else 'w',
+                                   encoding=self.encoding)
+                self.should_close_fds.stderr = self.stderr
+        else:
+            raise CmdyActionError("Don't know what to redirect. "
+                                  "Expecting STDIN, STDOUT or STDERR")
+
+        if not which and not self._onhold():
+            #self.data.redirect = {}
+            return self.run()
+
+        return self
 
 
-def _modkit_delegate(exe):
-    return Cmdy(exe)
+    @plugin_add_method(CmdyHolding)
+    def __gt__(self, file):
+        which = self.data.get('redirect', {}).get('which', [STDOUT])
+        return CmdyPluginRedirect._redirect(self, list(which), False, file)
+
+    @plugin_add_method(CmdyHolding)
+    def __lt__(self, file):
+        which = self.data.get('redirect', {}).get('which', [STDOUT])
+        return CmdyPluginRedirect._redirect(self, list(which), False, file)
+
+    @plugin_add_method(CmdyHolding)
+    def __xor__(self, file):
+        """Priority issue with gt (>)
+        We need brackets to ensure the order:
+        `(cmdy.ls().r(REDIR_RSPT) > outfile) > errfile`
+        To avoid this, use xor (^) instead
+        """
+        which = self.data.get('redirect', {}).get('which', [STDOUT])
+        if which[0] == STDIN:
+            return self.__lt__(file)
+        return self.__gt__(file)
+
+    @plugin_add_method(CmdyHolding)
+    def __rshift__(self, file):
+        which = self.data.get('redirect', {}).get('which', [STDOUT])
+        return CmdyPluginRedirect._redirect(self, list(which), True, file)
+
+    @plugin_hold_then('r,redir', hold_right=False)
+    def redirect(self, *which):
+        """Redirect the input/output"""
+
+        # We should wait for the command to finish, so that we
+        # don't leave it piping in background
+        # To do so, use it in async mode
+        self.should_wait = True
+
+        which = which or [STDOUT]
+
+        # since this is final, so
+        # cmdy.ls().r().r() will never happen
+        if self.data.redirect: # pragma: no cover
+            raise CmdyActionError('Unconsumed redirect action.')
+
+        # initialize data
+        self.data.redirect.which = list(which)
+
+        return self
+
+@cmdy_plugin
+class CmdyPluginFg:
+    """Plugin: fg
+    Running command in foreground
+    Using sys.stdout and sys.stderr"""
+    async def _feed(self: CmdyResult,
+                    poll_interval: float = 0.1):
+        """Try to feed stdout/stderr to sys.stdout/sys.stderr"""
+
+        async def _feed_one(instream, outstream):
+            try:
+                out = await _curio.timeout_after(poll_interval,
+                                                 instream.__anext__)
+            except _curio.TaskTimeout:
+                pass
+            except StopAsyncIteration:
+                return False
+            else:
+                if self.holding.encoding:
+                    outstream.write(out.decode(self.holding.encoding))
+                else:
+                    outstream.buffer.write(out)
+                outstream.flush()
+            return True
+
+        out_live = err_live = True
+        while out_live or err_live:
+            if out_live:
+                out_live = await _feed_one(self.proc.stdout, _sys.stdout)
+            if err_live:
+                err_live = await _feed_one(self.proc.stderr, _sys.stderr)
+
+        if isinstance(self, CmdyAsyncResult):
+            await self.wait()
+
+    @plugin_hold_then('fg', final=True, hold_right=False)
+    def foreground(self, stdin: bool = False,
+                   poll_interval: bool = .1
+                   ): #-> Union[CmdyHolding, CmdyResult]
+        """Running command in foreground
+        Using sys.stdout and sys.stderr"""
+        self.data.foreground.stdin = stdin
+        self.data.foreground.poll_interval = poll_interval
+
+
+        if ((stdin and self.stdin != _subprocess.PIPE) or
+                self.stdout != _subprocess.PIPE or
+                self.stderr != _subprocess.PIPE):
+            _warnings.warn("Previous redirected pipe will be ignored.")
+
+        # fileinput.input is good to use here
+        # as it has fileno()
+        self.stdin = _fileinput.input() if stdin else self.stdin
+        self.stdout = _subprocess.PIPE
+        self.stderr = _subprocess.PIPE
+
+        if not self._onhold():
+            return self.run()
+        return self
+
+    @plugin_add_method(CmdyHolding)
+    def run(self, wait=None):
+        """Run the command and bump stdout/stderr to sys'"""
+        orig_run = self._original('run')
+
+        if not self.data.get('foreground'):
+            return orig_run(self, wait)
+
+        ret = orig_run(self, False)
+
+        _curio.run(CmdyPluginFg._feed(ret, self.data.foreground.poll_interval))
+        # we can't in self.wait() in _curio.run, because there is
+        # already a _curio kernel running inside CmdyResult.wait()
+        return ret if isinstance(ret, CmdyAsyncResult) else ret.wait()
+
+@cmdy_plugin
+class CmdyPluginPipe:
+    """Plugin: pipe
+    Allow piping from one command to another
+    `cmdy.ls().pipe() | cmdy.cat()`
+    """
+    @plugin_add_property(CmdyResult)
+    def piped_cmds(self):
+        """Get cmds that along the piping path
+
+        Example:
+            ```python
+            c = cmdy.echo(123).p() | cmdy.cat()
+            c.piped_cmds == ['echo 123', 'cat']
+            ```
+        """
+        piped_from = self.holding.data.get('pipe', {}).get('from')
+        if piped_from:
+            return piped_from.piped_cmds + [self.cmd]
+        return [self.cmd]
+
+    @plugin_add_property(CmdyResult)
+    def piped_strcmds(self):
+        """Get cmds that along the piping path
+
+        Example:
+            ```python
+            c = cmdy.echo(123).p() | cmdy.cat()
+            c.piped_cmds == ['echo 123', 'cat']
+            ```
+        """
+        piped_from = self.holding.data.get('pipe', {}).get('from')
+        if piped_from:
+            return piped_from.piped_strcmds + [self.strcmd]
+        return [self.strcmd]
+
+    @plugin_add_property(CmdyHolding)
+    def piped_cmds_(self):
+        """Get cmds that along the piping path
+
+        Example:
+            ```python
+            c = cmdy.echo(123).p() | cmdy.cat()
+            c.piped_cmds == ['echo 123', 'cat']
+            ```
+        """
+        piped_from = self.data.get('pipe', {}).get('from')
+        if piped_from:
+            return piped_from.piped_cmds + [self.cmd]
+        return [self.cmd]
+
+    @plugin_add_property(CmdyHolding)
+    def piped_strcmds_(self):
+        """Get cmds that along the piping path
+
+        Example:
+            ```python
+            c = cmdy.echo(123).p() | cmdy.cat()
+            c.piped_cmds == ['echo 123', 'cat']
+            ```
+        """
+        piped_from = self.data.get('pipe', {}).get('from')
+        if piped_from:
+            return piped_from.piped_strcmds + [self.strcmd]
+        return [self.strcmd]
+
+    @plugin_add_method(CmdyHolding)
+    def __or__(self, other: CmdyHolding):
+
+        if not self.data.get('pipe'):
+            raise CmdyActionError('Piping options have been consumed or trying '
+                                  'to pipe from non-piping command')
+
+        assert isinstance(other, CmdyHolding), ("Can only pipe to "
+                                                "a CmdyHolding object.")
+
+        other_pipe_data = other.data.setdefault('pipe', {})
+        other_pipe_data['from'] = self
+
+        # We shall not check the event, because the purpose here
+        # is to clear the EVENT
+        # But we need to check if other is also a piping command
+        # which will be set if .pipe() is called
+        if (not other._onhold(check_event=False) and
+                not other.data.get('pipe', {}).get('which')):
+            self.event.clear()
+            return other.run()
+
+        return other
+
+    @plugin_hold_then('p')
+    def pipe(self, which=None):
+        """Allow command piping"""
+        # initialize data
+        which = which or STDOUT
+        self.data.pipe.which = which
+
+        if ((which == STDOUT and self.stdout != _subprocess.PIPE) or
+                (which == STDERR and self.stderr != _subprocess.PIPE)):
+
+            raise CmdyActionError("Cannot pipe from a redirected PIPE.")
+        self.event.set()
+        return self
+
+    @plugin_add_method(CmdyHolding)
+    def run(self, wait=None):
+        """From from prior piped command"""
+        orig_run = self._original('run')
+
+        if not self.data.get('pipe', {}).get('from'):
+            return orig_run(self, wait)
+
+        prior = self.data.pipe['from']
+        prior_result = prior.run()
+
+        self.stdin = (prior_result.proc.stdout
+                      if prior.data.pipe.which == STDOUT
+                      else prior_result.proc.stderr)
+
+        return orig_run(self, wait)
+
+@cmdy_plugin
+class CmdyPluginIter:
+    """Plugin: iter
+    Iterator over results
+    """
+    @plugin_add_method(CmdyResult)
+    def __iter__(self):
+        return self
+
+    @plugin_add_property(CmdyResult)
+    def stdout(self):
+        """Get the iterable of stdout"""
+
+        if self.holding.stdout != _subprocess.PIPE:
+            # redirected, we are unable to fetch the stdout
+            return None
+
+        if self._stdout is not None:
+            return self._stdout
+
+        orig_stdout = self._original('stdout')
+
+        if not self.data.get('iter'):
+            return orig_stdout.fget(self)
+
+        which = self.data.iter.get('which', STDOUT)
+        self._stdout = _CmdySyncStreamFromAsync(self.proc.stdout,
+                                                self.holding.encoding)
+        if which != STDOUT:
+            self._stdout = self._stdout.dump()
+        return self._stdout
+
+    @plugin_add_property(CmdyResult)
+    def stderr(self):
+        """Get the iterable of stderr"""
+
+        if self.holding.stderr != _subprocess.PIPE:
+            # redirected, we are unable to fetch the stdout
+            return None
+
+        if self._stderr is not None:
+            return self._stderr
+
+        orig_stderr = self._original('stderr')
+
+        if not self.data.get('iter'):
+            return orig_stderr.fget(self)
+
+        which = self.data.iter.get('which', STDOUT)
+        self._stderr = _CmdySyncStreamFromAsync(self.proc.stderr,
+                                                self.holding.encoding)
+        if which != STDERR:
+            self._stderr = self._stderr.dump()
+        return self._stderr
+
+    @plugin_add_method(CmdyResult)
+    def __next__(self):
+        return self.next()
+
+    @plugin_add_method(CmdyResult)
+    def next(self, timeout=None):
+        """Get next row, with a timeout limit
+        If nothing produced after the timeout, returns an empty string
+        """
+        which = self.data.get('iter', {}).get('which', STDOUT)
+        try:
+            if which == STDOUT:
+                if not isinstance(self.stdout, _CmdySyncStreamFromAsync):
+                    raise TypeError('CmdyResult object is not iterable '
+                                    'synchronously')
+                return self.stdout.next(timeout)
+
+            if not isinstance(self.stderr, _CmdySyncStreamFromAsync):
+                raise TypeError('CmdyResult object is not iterable '
+                                'synchronously')
+            return self.stderr.next(timeout)
+        except StopIteration:
+            # self.data.iter = {}
+            self.wait()
+            raise
+
+    @plugin_run_then('it')
+    def iter(self, which=None): # pylint: disable=redefined-builtin
+        """Iterator over STDOUT or STDERR of a CmdyResult object"""
+
+        which = which or STDOUT
+        self.data.iter.which = which
+
+        if (
+                (which == STDOUT and
+                 self.holding.stdout != _subprocess.PIPE) or
+                (which == STDERR and
+                 self.holding.stderr != _subprocess.PIPE)
+        ):
+            raise CmdyActionError("Cannot iterate from a redirected PIPE.")
+
+        return self
+
+    @plugin_hold_then('it', final=True, hold_right=False)
+    def iter_(self, which=None):
+        """Put holding on running and iterator over STDOUT or STDERR"""
+        self.should_wait = False
+
+        if self._onhold():
+            return self
+        return self.run().iter(which)
+
+@cmdy_plugin
+class CmdyPluginValue:
+    """Plugins: Value casting
+    This is blocking in sync mode
+    """
+    @plugin_run_then
+    def str(self, which=None): # pylint: disable=redefined-builtin
+        """Fetch the results as a string"""
+        which = which or STDOUT
+        if (
+                (which == STDOUT and
+                 self.holding.stdout != _subprocess.PIPE) or
+                (which == STDERR and
+                 self.holding.stderr != _subprocess.PIPE)
+        ):
+            raise CmdyActionError("Cannot fetch results from "
+                                  "a redirected PIPE.")
+
+        if which not in (STDOUT, STDERR):
+            raise CmdyActionError("Expecting STDOUT or STDERR for which.")
+
+        # cached results
+        if which == STDOUT and getattr(self, '_stdout_str', None) is not None:
+            return self._stdout_str
+        if which == STDERR and getattr(self, '_stderr_str', None) is not None:
+            return self._stderr_str
+
+        self.wait()
+        out = self.stdout if which == STDOUT else self.stderr
+        if isinstance(out, (str, bytes)):
+            setattr(self,
+                    '_stdout_str' if which == STDOUT else '_stderr_str',
+                    out)
+            return out
+
+        ret = ''.join(out) if self.holding.encoding else b''.join(out)
+        setattr(self, '_stdout_str' if which == STDOUT else '_stderr_str', ret)
+        return ret
+
+    @plugin_run_then
+    async def astr(self, which=None):
+        """Async version of str"""
+
+        which = which or STDOUT
+        if (
+                (which == STDOUT and
+                 self.holding.stdout != _subprocess.PIPE) or
+                (which == STDERR and
+                 self.holding.stderr != _subprocess.PIPE)
+        ):
+            raise CmdyActionError("Cannot fetch results from "
+                                  "a redirected PIPE.")
+
+        if which not in (STDOUT, STDERR):
+            raise CmdyActionError("Expecting STDOUT or STDERR for which.")
+
+        # cached results
+        if which == STDOUT and getattr(self, '_stdout_str', None) is not None:
+            return self._stdout_str
+        if which == STDERR and getattr(self, '_stderr_str', None) is not None:
+            return self._stderr_str
+
+        await self.wait()
+        ret = ((await self.stdout.read()) if which == STDOUT
+               else (await self.stderr.read()))
+
+        if self.holding.encoding:
+            value = ret.decode(self.holding.encoding)
+            setattr(self, '_stdout_str' if which == STDOUT else '_stderr_str',
+                    value)
+            return value
+
+        setattr(self, '_stdout_str' if which == STDOUT else '_stderr_str', ret)
+        return ret
+
+    @plugin_add_method(CmdyResult)
+    def __contains__(self, item):
+        return item in self.str()
+
+    @plugin_add_method(CmdyResult)
+    def __eq__(self, other):
+        return self.str() == other
+
+    @plugin_add_method(CmdyResult)
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    @plugin_add_method(CmdyResult)
+    def __str__(self):
+        return self.str()
+
+    @plugin_add_method(CmdyResult)
+    def __getattr__(self, name):
+        if name in dir('') and not name.startswith('__'):
+            return getattr(self.str(), name)
+        return self.__getattribute__(name)
+
+    @plugin_run_then
+    def int(self, which=None): # pylint: disable=redefined-builtin
+        """Cast value to int"""
+        return int(self.str(which))
+
+    @plugin_run_then
+    async def aint(self, which=None):
+        """Async version of int"""
+        return int(await self.astr(which))
+
+    @plugin_run_then
+    def float(self, which=None): # pylint: disable=redefined-builtin
+        """Cast value to float"""
+        return float(self.str(which))
+
+    @plugin_run_then
+    async def afloat(self, which=None):
+        """Async version of float"""
+        return float(await self.astr(which))
+
+# One can disable builtin plugins
+CMDY_PLUGIN_FG = CmdyPluginFg()
+CMDY_PLUGIN_ITER = CmdyPluginIter()
+CMDY_PLUGIN_REDIRECT = CmdyPluginRedirect()
+CMDY_PLUGIN_PIPE = CmdyPluginPipe()
+CMDY_PLUGIN_VALUE = CmdyPluginValue()
+
+def _modkit_delegate(name):
+    return Cmdy(name)
 
 
 def _modkit_call(oldmod, newmod, **kwargs):
-    newmod.config.update(oldmod.config)
-    newmod.config._protected['cached'].update(
-        oldmod.config._protected['cached'])
-    newmod.BAKED_ARGS.update(oldmod.BAKED_ARGS)
-    newmod.BAKED_ARGS.update(kwargs)
-    newmod._Utils.piped_pool = oldmod._Utils.piped_pool
+    newmod.CMDY_CONFIG = oldmod.CMDY_CONFIG.copy()
+    newmod._CMDY_BACKED_ARGS = oldmod._CMDY_BACKED_ARGS.copy()
+    newmod._CMDY_BACKED_ARGS.update(kwargs)
+    print(newmod._CMDY_BACKED_ARGS, id(newmod._CMDY_BACKED_ARGS), id(oldmod._CMDY_BACKED_ARGS))
+    newmod._CMDY_EVENT = _Event()
 
-
-Modkit().ban('os', 'sys', 'time', 'threading', 'subprocess', 'Config', 'Queue',
-             'QueueEmpty')
+# not banning anything
+# but conventionally names start with _ should not be exported
+Modkit()

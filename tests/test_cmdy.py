@@ -1,450 +1,660 @@
-from __future__ import print_function
+import sys
+import tempfile
+from path import Path
+from contextlib import contextmanager
+from diot import Diot
 import pytest
-from os import path
 import cmdy
-import logging
-import time
-from tempfile import gettempdir
-from collections import OrderedDict
-from modkit import NameBannedFromImport
-
-TMPDIR  = gettempdir()
-__DIR__ = path.dirname(path.abspath(__file__))
-
-def setup_module():
-    cmdy.config.clear()
-    cmdy.config._load(dict(default = cmdy._Utils.default_config))
-
-class TestCmdy(object):
-
-    def testBake(self):
-        cmdy2 = cmdy(_okcode = [0, 1])
-        cmdy2.exit(1)
-        with pytest.raises(cmdy2.CmdyReturnCodeException):
-            cmdy2.exit(2)
-
-    def testEnv(self):
-        from os import environ
-        environ['VAR1'] = 'var1'
-        assert cmdy.bash(c = 'echo $VAR2', _env = {'VAR2': 'var2'}).strip() == 'var2'
-        assert cmdy.bash(c = 'echo $VAR1', _env = {'VAR2': 'var2'}).strip() == 'var1'
-        assert cmdy.bash(c = 'echo $VAR1', _env = {'VAR2': 'var2', '_update': False}).strip() == ''
-
-        # reset
-        cmd = cmdy.bash(c = 'export VAR1="1$VAR1"; echo $VAR1')
-        assert cmd.strip() == '1var1'
-        environ['VAR1'] = 'var2'
-        cmd.run()
-        assert cmd.strip() == '1var1'
-        environ['VAR1'] = 'var2'
-        cmd.reset()
-        cmd.run()
-        assert cmd.strip() == '1var2'
-
-    def testDebug(self, caplog):
-        with caplog.at_level(logging.DEBUG, logger="cmdy"):
-            cmdy.bash(c = 'echo 1', _debug = True)
-        # [cmdy] Running: bash -c 'echo 1'
-        assert "Running: bash -c 'echo 1'" in caplog.text
-
-    def testModule(self):
-        from cmdy import ls
-        assert isinstance(ls, cmdy.Cmdy)
-        with pytest.raises(NameBannedFromImport):
-            cmdy.os
-
-    def testCall(self):
-        ls_baked  = cmdy.Cmdy('ls')(_bake = True)
-        assert isinstance(ls_baked, cmdy.Cmdy)
-        cr = ls_baked()
-        assert isinstance(cr, cmdy.CmdyResult)
-        cr = cmdy.Cmdy('ls').bake(l = True, _exe = 'list')
-        assert isinstance(cr, cmdy.Cmdy)
-        c = cr(_pipe = True)
-        assert c.cmd == 'list -l'
-        # release pipe
-        with pytest.raises(cmdy.CmdyReturnCodeException):
-            c | cmdy.ls()
-
-    def testGetattr(self):
-        git = cmdy.Cmdy('git')
-        gitshow = git.show
-        assert isinstance(gitshow, cmdy.Cmdy)
-        assert gitshow._cmd == 'show'
-
-
-    def testOKCodeBeingOverriden(self):
-        ls = cmdy.ls.bake(_okcode = '0~3')
-        x = ls()
-        assert x.call_args['_okcode'] == [0,1,2,3]
-
-    def testRaise(self):
-        bash = cmdy.bash
-        with pytest.raises(cmdy.CmdyReturnCodeException):
-            bash(c = 'for i in $(seq 1 40); do echo $i; done; exit 1')
-        c = bash(c = 'exit 1', _raise = False)
-        assert c.rc == 1
-
-        with pytest.raises(cmdy.CmdyReturnCodeException):
-            bash(c = 'for i in $(seq 1 40); do echo $i; done 1>&2; exit 1')
-
-        with pytest.raises(cmdy.CmdyReturnCodeException):
-            bash(c = 'exit 1', _iter = True).wait()
-        with pytest.raises(cmdy.CmdyReturnCodeException):
-            bash(c = 'exit 1', _iter = 'err').wait()
-
-    def testDotArgs(self):
-        # ** is required
-        assert cmdy.bash(**{'.env': {'ABC': '1'}}, c = 'echo $ABC').strip() == '1'
-
-    def testCallArgValidators(self):
-        with pytest.raises(ValueError):
-            cmdy.bash(c = 'echo 1', _fg = True, _bg = True)
-
-    def testArgsFalse(self):
-        assert cmdy.bash(c = 'echo 1', e = False, _hold = 'true').cmd == 'bash -c \'echo 1\''
-
-    def testKeywordArgs(self):
-        assert cmdy.bash(out = '123', _hold = 'true').cmd == 'bash --out 123'
-
-class TestCmdyResult(object):
-
-    def test(self):
-        lsresult = cmdy.ls(__DIR__)
-        assert isinstance(lsresult, cmdy.CmdyResult)
-        assert path.basename(__file__) in lsresult
-
-    def testReprBool(self):
-        assert repr(cmdy.echo(123)) == '123\n'
-        assert bool(cmdy.exit(0)) is True
-        assert bool(cmdy.exit(1, _raise = False)) is False
-
-    def testPipedCmd(self):
-        c = cmdy.echo('1,2,3', _pipe = True) | cmdy.cut(d=',', f=2)
-        assert c.strip() == '2'
-        assert c.pipedcmd == 'echo 1,2,3 | cut -d , -f 2'
-        assert cmdy.echo(123, _hold = True).pipedcmd == 'echo 123'
-
-    def testOKCode(self):
-        with pytest.raises(cmdy.CmdyReturnCodeException):
-            cmdy.__command_not_exist__()
-
-        ret = cmdy.__command_not_exist__(_okcode = '0,127')
-        assert ret == ''
-
-        ret = cmdy.__command_not_exist__(_okcode = 127)
-        assert ret == ''
-
-    def testTimeout(self):
-
-        ret = cmdy.bash(c = 'sleep 0.1; echo out', _timeout = 10)
-        assert ret.strip() == 'out'
-
-        with pytest.raises(cmdy.CmdyTimeoutException):
-            cmdy.bash(c = 'sleep 0.3; echo out', _timeout = .1)
-
-        print('\n======================== Expect to see CmdyTimeoutException ========================')
-        list(cmdy.bash(c = 'for i in $(seq 1 8); do echo outiter; sleep 0.1; done', _timeout = .5, _iter = True))
-
-        # timeout at background
-        print('\n======================== Expect to see CmdyTimeoutException ========================')
-        cmdy.bash(c = 'sleep 0.3; echo out', _bg = True, _timeout = .1)
-        time.sleep(.4)
-
-        # expect to see exception
-        print('======================== Expect to see CmdyTimeoutException ========================')
-
-    def testFg(self):
-        # compose a python file
-        pyfile = path.join(TMPDIR, 'testFg.py')
-
-        with open(pyfile, 'w') as f:
-            f.write("""from cmdy import bash
-bash(c = "echo stdout; echo stderr 1>&2", _fg = True)
-""")
-        c = cmdy.python(pyfile)
-        assert c.stdout.strip() == 'stdout'
-        assert c.stderr.strip() == 'stderr'
-
-    def testPipe(self):
-        ret = cmdy.bash(c = 'echo -e "1\t2\t3\n4\t5\t6"', _pipe = True) | cmdy.cut(f = 2)
-        assert ret.strip() == "2\n5"
-
-        # pipe chain
-        ret = (cmdy.bash(c = 'echo -e "1\t2\t3\n4\t5\t6"', _pipe = True) | cmdy.cut(f = 2, _pipe = True)) | cmdy.tail(n = 1)
-        assert ret.strip() == "5"
-
-    def testRedirect(self):
-        testoutfile = path.join(TMPDIR, 'testRedirectOut.txt')
-        cmdy.echo("123", _out = '>') > testoutfile
-        with open(testoutfile, 'r') as f:
-            assert f.read().strip() == '123'
-
-        cmdy.echo("123", _out = testoutfile)
-        with open(testoutfile, 'r') as f:
-            assert f.read().strip() == '123'
-
-        cmdy.echo("456", _out = '>') >> testoutfile
-        with open(testoutfile, 'r') as f:
-            assert f.read().strip() == '123\n456'
-
-        cmdy.echo("456", _out_ = testoutfile)
-        with open(testoutfile, 'r') as f:
-            assert f.read().strip() == '123\n456\n456'
-
-        testerrfile = path.join(TMPDIR, 'testRedirectErr.txt')
-        cmdy.__command_not_exist__(_okcode = 127, _err = testerrfile)
-        with open(testerrfile, 'r') as f:
-            assert ' not found' in f.read().strip()
-
-        cmdy.__command_not_exist__(_okcode = 127, _err = '>') > testerrfile
-        with open(testerrfile, 'r') as f:
-            assert ' not found' in f.read().strip()
-
-        cmdy.ls('__file_not_exits__', _okcode = 2, _err = '>') >> testerrfile
-        with open(testerrfile, 'r') as f:
-            content = f.read()
-            assert ' not found' in content
-            assert 'No such file or directory' in content
-
-        cmdy.echo('command not found', _out = testerrfile)
-        cmdy.ls('__file_not_exits__', _okcode = 2, _err_ = testerrfile)
-        with open(testerrfile, 'r') as f:
-            content = f.read()
-            assert ' not found' in content
-            assert 'No such file or directory' in content
-
-    def testResultAsStr(self):
-        a = cmdy.echo('123')
-        assert str(a).strip() == '123'
-        assert a.str().strip() == '123'
-        assert a + '456' == '123\n456'
-        assert '123' in a
-        assert a == '123\n'
-        assert a != ''
-        assert a.int() == 123
-        assert a.float() == 123.0
-
-    def testResultAsInt(self):
-        a = cmdy.echo('123')
-        assert a.int() == 123
-        with pytest.raises(ValueError):
-            cmdy.echo('x').int()
-        assert cmdy.echo('x').int(raise_exc = False) is None
-
-    def testResultAsFloat(self):
-        a = cmdy.echo('123.1')
-        assert a.float() == 123.1
-        with pytest.raises(ValueError):
-            cmdy.echo('x').float()
-        assert cmdy.echo('x').float(raise_exc = False) is None
-
-    def testResultAdd(self):
-        a = cmdy.echo('123.1')
-        assert a + '1' == '123.1\n1'
-        with pytest.raises(TypeError):
-            cmdy.echo('1234') + 1
-        with pytest.raises(TypeError):
-            1 in cmdy.echo('1234')
-
-    def testNoSuchAttribute(self):
-        with pytest.raises(AttributeError):
-            cmdy.echo('x').noattr
-
-    def testCallableBg(self):
-        def bg(cmd):
-            assert cmd.stdout.strip() == '1'
-        cmdy.bash(c = 'echo 1; sleep .5', _bg = bg)
-        time.sleep(1)
-
-    def testNoP(self):
-        c = cmdy.sleep(.5, _hold = True)
-        c.should_wait = False
-        c.run()
-        c.p = None
-        with pytest.raises(cmdy.CmdyReturnCodeException):
-            c._wait()
-
-    def testNextExceptions(self):
-        with pytest.raises(RuntimeError):
-            next(cmdy.bash(c = 'echo 1', _hold = True))
-        c = cmdy.bash(c = 'echo 1', _hold = True)
-        c.done = True
-        with pytest.raises(RuntimeError):
-            next(c)
-        with pytest.raises(RuntimeError):
-            next(cmdy.bash(c = 'echo 1', _stderr = 0, _iter = 'err'))
-        with pytest.raises(RuntimeError):
-            next(cmdy.bash(c = 'echo 1', _stdout = 0, _iter = 'out'))
-        with pytest.raises(RuntimeError):
-            next(cmdy.bash(c = 'echo 1', _iter = False))
-
-        c = cmdy.bash(c = 'for i in $(seq 1 7); do echo $i; done', _iter = True)
-        for line in c:
-            print(line, end = '')
-        c.done = False
-        # same
-        c = cmdy.bash(c = 'for i in $(seq 1 7); do echo $i; done', _iter = True).stdout
-        for line in c:
-            print(line, end = '')
-        # stderr
-        c = cmdy.bash(c = 'for i in $(seq 1 7); do echo $i; done 1>&2', _iter = 'err').stderr
-        for line in c:
-            print(line, end = '')
-
-
-    def testStdoutExc(self):
-        c = cmdy.bash(c = 'echo 1', _hold = True)
-        with pytest.raises(RuntimeError): # Command not started to run yet.
-            c.stdout
-        assert cmdy.bash(c = 'echo 1', _fg = True).stdout == ''
-        c = cmdy.bash(c = 'echo 1', _hold = True)
-        c.run()
-        c.p = None
-        # Failed to open a process.
-        with pytest.raises(RuntimeError):
-            c.stdout
-
-        # Background command has not finished yet.
-        with pytest.raises(RuntimeError):
-            cmdy.sleep(.5, _bg = True).stdout
-
-        # stdout REDIRECTED
-        c = cmdy.echo(123)
-        c.p.stdout = None
-        with pytest.raises(RuntimeError):
-            c.stdout
-
-
-    def testStderrExc(self):
-        c = cmdy.bash(c = 'echo 1', _hold = True)
-        with pytest.raises(RuntimeError): # Command not started to run yet.
-            c.stderr
-        with pytest.raises(RuntimeError):
-            cmdy.bash(c = 'echo 1', _fg = True).stderr
-        c = cmdy.bash(c = 'echo 1', _hold = True)
-        c.run()
-        c.p = None
-        # Failed to open a process.
-        with pytest.raises(RuntimeError):
-            c.stderr
-
-        # Background command has not finished yet.
-        with pytest.raises(RuntimeError):
-            cmdy.sleep(.5, _bg = True).stderr
-
-        # stdout REDIRECTED
-        c = cmdy.echo(123)
-        c.p.stderr = None
-        with pytest.raises(RuntimeError):
-            c.stderr
-
-class TestUtils(object):
-
-    def testGetPiped(self):
-        pp = cmdy._Utils.get_piped()
-        assert pp == []
-        pp.append(1)
-        pp = cmdy._Utils.get_piped()
-        assert pp == [1]
-
-    def testParseKwargsEmpty(self):
-        kw = cmdy._Utils.parse_kwargs({}, {})
-        assert kw == ''
-
-    def testParseKwargsPositional(self):
-        kw = cmdy._Utils.parse_kwargs({'_': 1, '': 2}, {})
-        assert kw == '2 1'
-        kw = cmdy._Utils.parse_kwargs({'_': [1, 2, "a b"], 'a': 6, "": ["3", 4]}, {'_prefix': 'auto', '_sep': ' '})
-        assert kw == "3 4 -a 6 1 2 'a b'"
-
-    def testParseKwargsConf(self):
-        kw = cmdy._Utils.parse_kwargs({'a':1, 'bc':2, 'def': [3,4,5]}, dict(_prefix = 'auto', _sep = ' ', _dupkey = False))
-        assert kw == '-a 1 --bc 2 --def 3 4 5'
-        kw = cmdy._Utils.parse_kwargs({'a':1, 'bc':2, 'def': [3,4,5], 'e': True}, dict(_prefix = '---', _sep = '=', _dupkey = True))
-        assert kw == '---a=1 ---bc=2 ---def=3 ---def=4 ---def=5 ---e'
-        kw = cmdy._Utils.parse_kwargs({'a':1, 'bc':2, 'def': [3,4,5], 'e': True}, dict(_prefix = '-', _sep = 'auto', _dupkey = True))
-        assert kw == '-a 1 -bc=2 -def=3 -def=4 -def=5 -e'
-
-        # _raw
-        kw = cmdy._Utils.parse_kwargs(dict(a_b = 1), dict(_prefix = 'auto', _sep = ' ', _dupkey = False, _raw = False), True)
-        assert kw == '--a-b 1'
-        kw = cmdy._Utils.parse_kwargs(dict(a_b = 1), dict(_prefix = 'auto', _sep = ' ', _dupkey = False, _raw = True), True)
-        assert kw == '--a_b 1'
-
-    def testParseKwargsOrder(self):
-        kw = cmdy._Utils.parse_kwargs(OrderedDict([('a', 1), ('def', [3, 4, 5]), ('bc', 2)]), dict(_prefix = 'auto', _sep = ' ', _dupkey = False))
-        assert kw == '-a 1 --def 3 4 5 --bc 2'
-
-    def testParseArgs(self):
-        args, keywords, kwargs, call_args, popen_args = cmdy._Utils.parse_args('ls', ['-l'], {'color': True})
-        assert args == '-l'
-        assert keywords == {'':[], '_':[], 'color': True}
-        assert kwargs == {key: cmdy._Utils.default_config[key] for key in cmdy._Utils.kw_arg_keys if key in cmdy._Utils.default_config}
-        assert call_args == {key: cmdy._Utils.default_config[key] for key in cmdy._Utils.call_arg_keys if key in cmdy._Utils.default_config}
-        assert popen_args == {key: cmdy._Utils.default_config[key] for key in cmdy._Utils.popen_arg_keys if key in cmdy._Utils.default_config}
-
-        args, keywords, kwargs, call_args, popen_args = cmdy._Utils.parse_args('ls', ['-l', {'_' : [1,2], '': 4, 'a': 8, 'bc': 'New File'}], {'color': True, '_prefix': '-'})
-        assert args == "-l 4 -a 8 -bc 'New File' 1 2"
-        assert keywords == {'':[], '_':[], 'color': True}
-        assert kwargs == {'_prefix': '-', '_sep': ' ', '_raw': False, '_dupkey': False}
-
-    def testParseArgsWithKeywords(self):
-        args, keywords, kwargs, call_args, popen_args = cmdy._Utils.parse_args('ls', ['-l'], {'out': 123, 'color': True})
-        assert args == '-l'
-        assert keywords == {'':[], '_':[], 'color': True, 'out': 123}
-        assert kwargs == {key: cmdy._Utils.default_config[key] for key in cmdy._Utils.kw_arg_keys if key in cmdy._Utils.default_config}
-        assert call_args == {key: cmdy._Utils.default_config[key] for key in cmdy._Utils.call_arg_keys if key in cmdy._Utils.default_config}
-        assert popen_args == {key: cmdy._Utils.default_config[key] for key in cmdy._Utils.popen_arg_keys if key in cmdy._Utils.default_config}
-
-def test_iter_merge():
-    if cmdy._Utils.get_piped():
-        del cmdy._Utils.get_piped()[:]
-    script = """
-    echo -n 1;
-    echo -n 2 >/dev/stderr;
-    echo -n 3;
-    echo -n 4 >/dev/stderr;
-    """
-    out = ''
-    for line in cmdy.bash(c=script, _iter=True):
-        out += line
-    assert out == '1234'
-
-    out = ''
-    for line in cmdy.bash(c=script, _iter='out'):
-        out += line
-    assert out == '13'
-
-    out = ''
-    for line in cmdy.bash(c=script, _iter='err'):
-        out += line
-    assert out == '24'
-
-
-def test_next_timeout():
-    if cmdy._Utils.get_piped():
-        del cmdy._Utils.get_piped()[:]
-
-    script = """
-    echo 1;
-    echo 2 >/dev/stderr;
-    sleep 1;
-    echo 3;
-    echo 4 >/dev/stderr;
-    """
-
-    cmd = cmdy.bash(c=script, _iter=True)
-    line = cmd.next()
-    assert line == '1\n'
-    line = cmd.next()
-    assert line == '2\n'
-    line = cmd.next(.6)
-    assert line is None
-    line = cmd.next(1)
-    assert line == '3\n'
-    line = cmd.next()
-    assert line == '4\n'
+from cmdy import *
+import curio
+
+def teardown_function():
+    CMDY_EVENT.clear()
+
+@pytest.fixture
+def no_iter():
+    ITER.disable()
+    yield
+    ITER.enable()
+
+@pytest.fixture
+def captured():
+
+    @contextmanager
+    def wrapper():
+        tmpfile = tempfile.NamedTemporaryFile('w', delete=False)
+        old_stdout = sys.stdout
+        sys.stdout = tmpfile
+
+        yield Path(tmpfile.name), tmpfile
+        sys.stdout.close()
+        sys.stdout = old_stdout
+    return wrapper
+
+def test_holding_new():
+
+    ret = CmdyHolding(*cmdy_util.parse_args('echo', ['echo', '123'], {}))
+    assert isinstance(ret, CmdyResult)
+
+def test_normal_run():
+
+    ret = cmdy.echo(n='1')
+    assert ret == '1'
+    assert ret.rc == ret._rc == 0
+
+    ret = cmdy.echo('1')
+    assert ret.strip() == '1'
+    assert ret.rc == 0
+    ret._stderr = 12
+    assert ret.stderr == 12
+
+def test_bake():
+
+    echo = cmdy.echo(n=True).bake()
+    ret = echo(_='1')
+    assert ret.cmd == ['echo', '-n', '1']
+    assert ret == '1'
+
+    with pytest.raises(CmdyBakingError):
+        cmdy.echo('1').bake()
+
+def test_fg(capsys):
+    # use a file obj to replace sys.stdout
+    # capsys doesn't work here
+    c = cmdy.echo('123').fg()
+    assert isinstance(c, CmdyResult)
+    assert capsys.readouterr().out == '123\n'
+
+def test_fg_hold_right(capsys):
+
+    c = cmdy.bash(c='echo 1234 && sleep .1').p() | cmdy.cat().fg()
+    assert isinstance(c, CmdyResult)
+    assert capsys.readouterr().out == '1234\n'
+
+def test_fg_warning():
+    h = cmdy.echo(123).h()
+    h.stdout = 99
+    with pytest.warns(UserWarning):
+        h.fg().run()
+
+def test_fg_noencoding(capsysbinary):
+    cmdy.echo(123, cmdy_encoding=None).fg()
+    assert capsysbinary.readouterr().out == b'123\n'
+
+def test_fg_timeout(capsys):
+    cmdy.bash(c='sleep .2 && echo 123').fg()
+    assert capsys.readouterr().out == '123\n'
+
+def test_redirect(tmp_path):
+
+    tmpfile = tmp_path / 'test_redirect.txt'
+    c = cmdy.echo(n='1234').r() > tmpfile
+    assert tmpfile.read_text() == '1234'
+    assert c.holding.stdout.closed
+    assert c.stdout is None
+    assert c.stderr == ''
+
+def test_redirect_failing_fetching(no_iter):
+    c = cmdy.echo(n=123).r(STDOUT) > DEVNULL
+    assert c.holding.stdout != curio.subprocess.PIPE
+    assert c.stdout is None
+
+    c = cmdy.bash(c='echo 123 1>&2').r(STDERR) > DEVNULL
+    assert c.stderr is None
+
+def test_redirect_stdin(tmp_path):
+    tmpfile = tmp_path / 'test_redirect_stdin.txt'
+    tmpfile.write_text('1\n2\n3')
+    c = cmdy.cat().r(STDIN) < tmpfile
+    assert c == '1\n2\n3'
+
+    c = cmdy.cat().r(STDIN) < cmdy.cat(tmpfile)
+    assert c == '1\n2\n3'
+
+    # from filelike
+    with open(tmpfile, 'r') as f:
+        c = cmdy.cat().r(STDIN) < f
+    assert c == '1\n2\n3'
+
+def test_redirect_rspt(tmp_path):
+    outfile = tmp_path / 'test_redirect_respectively_out.txt'
+    errfile = tmp_path / 'test_redirect_respectively_err.txt'
+    c = cmdy.echo(
+        '-n 123 1>&2 && echo -n 456', cmdy_shell=True
+    ).r(STDOUT, STDERR) ^ outfile > errfile
+    assert outfile.read_text() == '456'
+    assert errfile.read_text() == '123'
+
+    with open(outfile, 'a') as fout, open(errfile, 'w') as ferr:
+        c = cmdy.echo(
+            '-n 123 1>&2 && echo -n 456', cmdy_shell=True
+        ).r(STDOUT, STDERR) ^ fout > ferr
+        # fh should not be closed
+        fout.write('78')
+
+    assert outfile.read_text() == '45645678'
+    assert errfile.read_text() == '123'
+
+
+
+def test_redirect_both(tmp_path):
+    outfile = tmp_path / 'test_redirect_both_out.txt'
+    c = cmdy.echo(
+        '-n 123 1>&2 && echo -n 456', cmdy_shell=True
+    ).r(STDERR, STDOUT) ^ STDOUT > outfile
+    assert outfile.read_text() == '123456'
+
+    c = cmdy.echo(
+        '-n 123 1>&2 && echo -n 456', cmdy_shell=True
+    ).r(STDOUT, STDERR) >> outfile > STDOUT
+    assert outfile.read_text() == '123456123456'
+    assert c.stdout is None
+
+def test_redirect_mixed(tmp_path):
+    infile = tmp_path / 'test_redirect_mixed.txt'
+    outfile = tmp_path / 'test_redirect_mixed_out.txt'
+    infile.write_text('123')
+    cmdy.cat().r(STDIN, STDOUT) ^ infile > outfile
+    assert outfile.read_text() == '123'
+
+def test_redirect_stderr(tmp_path):
+    tmpfile = tmp_path / 'test_redirect_stderr.txt'
+    c = cmdy.echo('1234 1>&2', cmdy_shell=True).r(STDERR) > tmpfile
+    assert tmpfile.read_text() == '1234\n'
+    assert c.stderr is None
+
+    tmpfile2 = tmp_path / 'test_redirect_stdout.txt'
+    c = cmdy.echo('1234 1>&2', cmdy_shell=True).r(STDOUT) > tmpfile2
+    assert tmpfile2.read_text() == ''
+
+def test_hold(tmp_path):
+
+    tmpfile = tmp_path / 'test_redirect.txt'
+    c = cmdy.echo(n='1234').h()
+    cmd = c.r() > tmpfile
+    cmd.run()
+    assert tmpfile.read_text() == '1234'
+
+def test_hold_then_iter():
+    c = cmdy.echo('1\n2\n3').h()
+    ret = []
+    for line in c.run().iter():
+        ret.append(line.strip())
+    assert ret == ['1', '2', '3']
+
+def test_pipe():
+
+    c = cmdy.echo("1\n2\n3").p() | cmdy.grep(2)
+    assert c == '2\n'
+
+def test_multi_pipe():
+    c = cmdy.echo("11\n12\n22\n23").p() | cmdy.grep(2).p() | cmdy.grep(22)
+    assert c == '22\n'
+
+def test_iter():
+    c = cmdy.echo("1\n2\n3").iter()
+    assert next(c) == '1\n'
+    assert next(c) == '2\n'
+    assert next(c) == '3\n'
+
+    assert c.rc == 0
+
     with pytest.raises(StopIteration):
-        cmd.next()
+        next(c)
 
+    c = cmdy.echo("1\n2\n3").iter()
+    ret = []
+    for line in c:
+        ret.append(line.strip())
+    assert ret == ['1', '2', '3']
+
+def test_iter_stderr():
+    c = cmdy.echo("123 1>&2", cmdy_shell=True).iter(STDERR)
+    ret = []
+    for line in c:
+        ret.append(line.strip())
+    assert ret == ['123']
+
+def test_module_baking():
+    sh = cmdy(n=True)
+    assert sh.echo(123).strcmd == 'echo -n 123'
+    assert cmdy.echo(123).strcmd == 'echo 123'
+    assert id(sh.CMDY_EVENT) != id(CMDY_EVENT)
+    assert id(sh.CMDY_BACKED_ARGS) != id(cmdy.CMDY_BACKED_ARGS)
+
+def test_subcommand():
+    assert cmdy.echo.a() == 'a\n'
+
+def test_timeout():
+    with pytest.raises(CmdyTimeoutError):
+        cmdy.sleep(.5, cmdy_timeout=.1)
+    # runs ok
+    cmdy.sleep(.1, cmdy_timeout=.5)
+
+def test_pid():
+    assert isinstance(cmdy.echo().pid, int)
+
+def test_returncode_error():
+
+    with pytest.raises(CmdyReturnCodeError):
+        cmdy.bash('exit', 1)
+
+def test_exenotfound_error():
+
+    with pytest.raises(CmdyExecNotFoundError):
+        cmdy._no_such_command()
+
+def test_full_rc_error():
+    # stderr redirected
+    with pytest.raises(CmdyReturnCodeError) as ex:
+        cmdy.bash.exit(1).r(STDERR) > DEVNULL
+    assert '[STDERR] <NA / ITERATED / REDIRECTED>' in str(ex.value)
+
+    # long stdout
+    with pytest.raises(CmdyReturnCodeError) as ex:
+        cmdy.echo('-e "' + '\n'.join(str(s) for s in range(40)) + '" && exit 1',
+                  cmdy_shell=True)
+    assert '[8 lines hidden.]' in str(ex.value)
+
+    # long stderr
+    with pytest.raises(CmdyReturnCodeError) as ex:
+        cmdy.echo('-e "' + '\n'.join(str(s) for s in range(40)) + '" 1>&2 && exit 1',
+                  cmdy_shell=True)
+    assert '[8 lines hidden.]' in str(ex.value)
+
+def test_line_fetch_timeout():
+
+    import time
+    c = cmdy.bash(c='echo 1; sleep .21; echo 2').iter()
+    time.sleep(.1)
+    assert c.next(timeout=.1) == '1\n'
+    assert c.next(timeout=.1) == ''
+    assert c.next(timeout=.1) == '2\n'
+
+def test_piped_cmds():
+    c = cmdy.echo(123).p() | cmdy.cat().r() ^ DEVNULL
+    assert c.piped_cmds == [['echo', '123'], ['cat']]
+    assert c.piped_strcmds == ['echo 123', 'cat']
+
+    # works on holding objects too
+    c = cmdy.echo(123).p() | cmdy.cat().h()
+    assert c.piped_strcmds == ['echo 123', 'cat']
+    assert c.piped_cmds == [['echo', '123'], ['cat']]
+
+    assert cmdy.echo(123).piped_cmds == [['echo', '123']]
+    assert cmdy.echo(123).piped_strcmds == ['echo 123']
+
+def test_reprs():
+    c = cmdy.echo(123).h()
+    assert repr(c) == "<CmdyHolding: ['echo', '123']>"
+
+    c = cmdy.echo(123)
+    assert repr(c) == "<CmdyResult: ['echo', '123']>"
+
+    c = cmdy.echo(123).a()
+    assert repr(c) == "<CmdyAsyncResult: ['echo', '123']>"
+
+def test_reset():
+    c = cmdy.echo(n=123).h().r(STDOUT) > DEVNULL
+    c = c.run(True)
+    assert isinstance(c, CmdyResult)
+    assert c.stdout is None # redirected
+
+    reuse = c.holding.reset().run(True)
+    assert isinstance(reuse, CmdyResult)
+    assert reuse.stdout == '123'
+
+
+def test_async_close_fd(tmp_path):
+    tmpfile = tmp_path / 'test_async_close_fd.txt'
+    c = cmdy.echo(n="123").async_().r(STDOUT) > tmpfile
+    curio.run(c.wait())
+    assert c.holding.stdout.closed
+
+def test_async_fg(tmp_path):
+    c = cmdy.echo(n="").async_().fg()
+    assert isinstance(c, cmdy.CmdyAsyncResult)
+
+def test_async_timeout():
+    c = cmdy.sleep(.5, cmdy_timeout=.1).a()
+    with pytest.raises(CmdyTimeoutError):
+        curio.run(c.wait())
+
+    # runs ok
+    curio.run(cmdy.sleep(.1, cmdy_timeout=.5).a().wait())
+
+
+def test_async_value():
+    c = cmdy.echo(n=123).async_()
+    async def get_value():
+        return (await c.astr(), await c.aint(), await c.afloat())
+
+    assert curio.run(get_value()) == ('123', 123, 123.0)
+
+def test_async_value_redirect_error():
+    c = cmdy.echo(n=123).async_().r(STDOUT) > DEVNULL
+    assert isinstance(c, CmdyAsyncResult)
+    with pytest.raises(CmdyActionError):
+        curio.run(c.astr())
+
+def test_async_value_stderr():
+    c = cmdy.echo('-n 123 1>&2', cmdy_shell=True).a()
+    curio.run(c.wait())
+    assert curio.run(c.astr(STDERR)) == '123'
+
+    c = cmdy.echo('-n 123 1>&2', cmdy_encoding=None, cmdy_shell=True).a()
+    assert curio.run(c.astr(STDERR)) == b'123'
+    assert curio.run(c.astr(STDERR)) == b'123' # trigger cache
+
+    with pytest.raises(CmdyActionError):
+        curio.run(c.astr(111))
+
+
+def test_pipe_error():
+
+    with pytest.raises(cmdy.CmdyActionError):
+        cmdy.cat().h() | cmdy.grep(cmdy_raise=False)
+
+    h = cmdy.cat().h()
+    h.stdout = sys.stderr
+    with pytest.raises(cmdy.CmdyActionError):
+        h.p() | cmdy.grep()
+
+def test_redirect_error():
+    with pytest.raises(CmdyActionError):
+        cmdy.echo(123).h() > 1
+    with pytest.raises(CmdyActionError):
+        cmdy.echo().r('a') > 1
+
+def test_redirect_err_to_stdout():
+    with pytest.raises(CmdyActionError):
+        cmdy.echo().r(STDOUT) > STDERR
+
+    c = cmdy.echo('-n 123 1>&2', cmdy_shell=True).r(STDERR) > STDOUT
+    assert c == '123'
+    c = cmdy.echo('-n 123 1>&2', cmdy_shell=True)
+    assert c.str(STDERR) == '123'
+    assert c.str(STDERR) == '123'
+
+def test_iter_from_redirect():
+
+    c = cmdy.echo('-n 123 1>&2', cmdy_shell=True).r(STDERR) > STDOUT
+    ret = []
+    for line in c.iter():
+        ret.append(line.strip())
+    assert ret == ['123']
+
+def test_iter_from_redirect_error():
+
+    c = cmdy.echo('-n 123 1>&2', cmdy_shell=True).r(STDERR) > STDOUT
+    with pytest.raises(CmdyActionError):
+        c.iter(STDERR)
+
+def test_str(no_iter):
+    c = cmdy.echo(n=123).str()
+    assert c == '123'
+
+    c = cmdy.echo(n=123)
+    assert str(c) == '123'
+    assert '1' in c
+    assert c != '1'
+    assert c.stdout == '123'
+    assert c.stdout == '123' # trigger cache
+
+    c = cmdy.echo(n=',')
+    assert c.join(['1', '2']) == '1,2'
+
+    assert cmdy.echo(n=123).int() == 123
+    assert cmdy.echo(n=123).float() == 123.0
+
+    with pytest.raises(AttributeError):
+        cmdy.echo(n=123).x()
+
+def test_str_error():
+
+    c = cmdy.echo(n=123).r(STDOUT) > DEVNULL
+    with pytest.raises(CmdyActionError):
+        c.str()
+
+    with pytest.raises(CmdyActionError):
+        cmdy.echo(n=123).str('xyz')
+
+
+def test_str_from_stderr(no_iter):
+    c = cmdy.bash(c='echo -n 123 1>&2')
+    assert c.int(STDERR) == 123
+    assert c.stderr == '123'
+    assert c.stderr == '123' # trigger cache
+
+def test_str_from_iter():
+
+    c = cmdy.echo('-n 123 1>&2', cmdy_shell=True).iter(STDERR)
+    assert c.str(STDERR) == '123'
+
+def test_redirect_then_iter(tmp_path):
+
+    #c = cmdy.echo('-n 123 1>&2', cmdy_shell=True).r(STDERR).h() > STDOUT
+    # the right way:
+    c = cmdy.echo('-n 123 1>&2', cmdy_shell=True).h()
+    r = c.r(STDERR) > STDOUT
+    assert list(r.run().iter()) == ['123']
+
+    tmpfile = tmp_path / 'test_redirect_then_iter.txt'
+    c = cmdy.echo(n=123).h()
+    c.stdout = tmpfile.open('w')
+    c.stderr = tmpfile.open('w')
+    r = c.run()
+    r.data.iter = Diot(which=STDOUT)
+    assert r.stdout is None
+    assert r.stderr is None
+
+def test_async_rc_error():
+    c = cmdy.bash('exit', '1').a()
+    assert isinstance(c, CmdyAsyncResult)
+    with pytest.raises(CmdyReturnCodeError):
+        curio.run(c.wait())
+
+def test_raise_from_iter():
+    c = cmdy.echo('1 && exit 1', cmdy_shell=True, cmdy_okcode='0').iter()
+    with pytest.raises(CmdyReturnCodeError):
+        for line in c:
+            pass
+
+def test_raise_from_redirect():
+    #c = cmdy.echo('1 && exit 1', cmdy_shell=True).r(STDOUT).h() > DEVNULL
+    # the right way:
+    c = cmdy.echo('1 && exit 1', cmdy_shell=True).h()
+
+    c.r(STDOUT) > DEVNULL
+    with pytest.raises(CmdyReturnCodeError) as ex:
+        c.run()
+    assert '[STDOUT] <NA / ITERATED / REDIRECTED>' in str(ex.value)
+
+def test_iter_stdout_dump_stderr():
+    c = cmdy.echo(n=1).iter()
+    assert list(c) == ['1']
+    assert c.stderr == ''
+
+    c._stdout = 1
+    with pytest.raises(TypeError):
+        next(c)
+
+def test_iter_stderr_dump_stdout():
+    c = cmdy.echo('-n 1 1>&2', cmdy_shell=True).iter(STDERR)
+    assert list(c) == ['1']
+    assert c.stdout == ''
+
+    c._stderr = 1
+    with pytest.raises(TypeError):
+        next(c)
+
+def test_mixed_actions_hold_then():
+    # actions could be
+    # hold
+    # async_
+    # redirect
+    # fg
+    # iter
+    # pipe
+    a = cmdy.echo(123).h().a()
+    assert isinstance(a, CmdyHolding)
+
+    r = cmdy.echo(123).h().r()
+    assert isinstance(r, CmdyHolding)
+
+    fg = cmdy.echo(123).h().fg()
+    assert isinstance(fg, CmdyHolding)
+
+    it = cmdy.echo(123).h().iter()
+    assert isinstance(it, CmdyHolding)
+
+    p = cmdy.echo(123).h().p()
+    # release the lock
+    CMDY_EVENT.clear()
+    assert isinstance(p, CmdyHolding)
+
+    c = cmdy.echo(123).h()
+    a = c.a()
+    assert isinstance(a, CmdyHolding)
+    assert isinstance(a.run(), CmdyAsyncResult)
+
+    c = cmdy.echo(123).h()
+    r = c.r() > DEVNULL
+    assert isinstance(r, CmdyHolding)
+    assert isinstance(r.run(), CmdyResult)
+
+    c = cmdy.echo(123).h()
+    r = c.fg()
+    assert isinstance(r, CmdyHolding)
+    assert isinstance(r.run(), CmdyResult)
+
+    c = cmdy.echo(123).h()
+    r = c.iter()
+    assert isinstance(r, CmdyHolding)
+    assert isinstance(r.run(), CmdyResult)
+
+    c = cmdy.echo(123).h()
+    r = c.p()
+    assert isinstance(r, CmdyHolding)
+    assert CMDY_EVENT.is_set()
+
+def test_mixed_actions_async_then():
+    # actions could be
+    # hold
+    # async_
+    # redirect
+    # fg
+    # iter
+    # pipe
+
+    with pytest.raises(CmdyActionError):
+        # Unnecessary hold before an action.
+        cmdy.echo().a().h()
+
+    with pytest.raises(CmdyActionError):
+        cmdy.echo().a().a()
+
+    c = cmdy.echo().a()
+    with pytest.raises(AttributeError):
+        c.h()
+
+    with pytest.raises(AttributeError):
+        c.a()
+
+    a = cmdy.echo('1 1>&2', cmdy_shell=True).a().r(STDERR) > STDOUT
+    assert isinstance(a, CmdyAsyncResult)
+
+    c = cmdy.echo('1 1>&2', cmdy_shell=True).h()
+    assert isinstance(c.a().run(), CmdyAsyncResult)
+
+    a = cmdy.echo().a().fg()
+    assert isinstance(a, CmdyAsyncResult)
+
+    it = cmdy.echo().a().iter()
+    assert isinstance(it, CmdyAsyncResult)
+
+    it = cmdy.echo().h().a().run().iter()
+    assert isinstance(it, CmdyAsyncResult)
+
+    c = cmdy.echo().a().p()
+    CMDY_EVENT.clear()
+    assert isinstance(c, CmdyHolding)
+
+def test_mixed_actions_async_then_fg():
+    c = cmdy.echo().h()
+    fg = c.a().fg().run()
+    assert isinstance(fg, CmdyAsyncResult)
+
+def test_mixed_actions_async_then_pipe():
+    c = cmdy.echo().h()
+    assert isinstance(c, CmdyHolding)
+    p = c.a().p().run()
+    assert isinstance(p, CmdyAsyncResult)
+
+def test_mixed_actions_redir_then():
+    # actions could be
+    # hold
+    # async_
+    # redirect
+    # fg
+    # iter
+    # pipe
+    with pytest.raises(CmdyActionError):
+        cmdy.echo().r().h()
+
+    r = cmdy.echo().r()
+    with pytest.raises(CmdyActionError):
+        r.h()
+
+    a = cmdy.echo().r().a()
+    assert isinstance(a, CmdyAsyncResult)
+
+    h = cmdy.echo().h()
+    x = h.r().a().run()
+    assert isinstance(x, CmdyAsyncResult)
+
+    with pytest.raises(CmdyActionError):
+        cmdy.echo().r().r()
+
+    r = cmdy.echo().r()
+    with pytest.raises(CmdyActionError):
+        r.r()
+
+    h = cmdy.echo().h()
+    with pytest.raises(CmdyActionError):
+        r.r().r()
+
+    with pytest.raises(CmdyActionError):
+        cmdy.echo().r().fg() > DEVNULL
+
+    r = cmdy.echo().r() > DEVNULL
+    with pytest.raises(AttributeError):
+        r.fg()
+
+    with pytest.raises(CmdyActionError):
+        cmdy.echo().r().pipe()
+
+def test_mixed_actions_fg_then():
+    # actions could be
+    # hold
+    # async_
+    # redirect
+    # fg
+    # iter
+    # pipe
+
+    # fg is final, cannot do anything else
+    with pytest.raises(CmdyActionError):
+        cmdy.echo().h().fg().r()
+
+def test_mixed_actions_iter_then():
+
+    # iter is also final
+    with pytest.raises(CmdyActionError):
+        cmdy.echo().h().iter().r()
+
+def test_mixed_actions_pipe_then():
+
+    # pipe is also final
+    with pytest.raises(CmdyActionError):
+        cmdy.echo().h().pipe().r()
