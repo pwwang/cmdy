@@ -17,13 +17,12 @@ from threading import Event as _Event
 from shlex import quote as _quote
 import warnings as _warnings
 import inspect as _inspect
-import ast as _ast
 from diot import Diot as _Diot
 from modkit import modkit as _modkit
 from simpleconf import Config as _Config
 import curio as _curio
 from curio import subprocess as _subprocess
-import executing as _executing
+from varname import will as _will
 
 # We cannot define the variables that need to be baked
 # in submodules, because we don't want to deepcopy the
@@ -271,35 +270,6 @@ def _cmdy_parse_args(name: str, args: tuple, kwargs: dict):
 
     return ret_args, ret_kwargs, ret_cfgargs, ret_popenargs
 
-def _cmdy_will(stack=2) -> str:
-    """Foresee the attribute or member being called right after `cmdy.ls()`
-    This should be call only in `Cmdy.__call__`
-    This allows us to do next actions include piping and redirecting and
-    hold current command to run.
-
-    Example:
-        ```python
-        cmdy.ls().pipe     # gives pipe
-        cmdy.ls().pipe()   # also allowed
-        cmdy.ls().redirect # redirect
-        # commands ls is not running until next actions followed:
-        cmdy.ls().pipe | cmdy.cat()
-        ```
-    """
-    frame = _inspect.stack()[stack].frame
-    source = _executing.Source.executing(frame)
-    try:
-        node = source.node
-        assert isinstance(node, _ast.Call), ("Invalid use of function `will`")
-        node = node.parent
-    except (AssertionError, AttributeError):
-        return None
-
-    if not isinstance(node, _ast.Attribute):
-        return None
-
-    return node.attr
-
 def _cmdy_compose_cmd(args: list, kwargs: dict, *,
                       shell: list, prefix: str,
                       sep: str, dupkey: bool) -> list:
@@ -387,7 +357,7 @@ class Cmdy:
         # update the executable
         exe = ready_cfgargs.pop('exe', None) or self._name
 
-        will = _cmdy_will()
+        will = _will()
         if will == 'bake':
             if args:
                 raise CmdyBakingError('Must bake from keyword arguments.')
@@ -527,7 +497,7 @@ class CmdyHolding:
 
         self.data['async'] = True
         # update actions
-        self.did, self.curr, self.will = self.curr, self.will, _cmdy_will()
+        self.did, self.curr, self.will = self.curr, self.will, _will()
 
         if self._onhold():
             return self
@@ -539,7 +509,7 @@ class CmdyHolding:
         """Put the command on hold"""
         # Whever hold is called
         self.data['hold'] = True
-        self.did, self.curr, self.will = self.curr, self.will, _cmdy_will()
+        self.did, self.curr, self.will = self.curr, self.will, _will()
 
         if self.data['async'] or len(self.data) > 2:
             raise CmdyActionError("Should be called in "
@@ -878,7 +848,7 @@ def _plugin_then(cls, func, aliases=None, *,
     @_wraps(func)
     def wrapper(self, *args, **kwargs):
         # Update actions
-        self.did, self.curr, self.will = self.curr, self.will, _cmdy_will()
+        self.did, self.curr, self.will = self.curr, self.will, _will()
 
         if self.curr in finals and self.will in _CMDY_HOLDING_LEFT:
             raise CmdyActionError("Action taken after a final action.")

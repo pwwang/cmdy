@@ -16,9 +16,9 @@ repository = "https://github.com/pwwang/cmdy"
 python = "^3.6"
 modkit = "*"
 python-simpleconf = "*"
+python-varname = "*"
 curio = "^1.2"
 diot = "*"
-executing = "^0.4"
 
 [tool.poetry.dev-dependencies]
 pytest = "*"

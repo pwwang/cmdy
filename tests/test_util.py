@@ -2,7 +2,7 @@ import pytest
 import time
 import curio
 from diot import Diot
-from cmdy import (_cmdy_parse_args, _cmdy_will, _CmdySyncStreamFromAsync,
+from cmdy import (_cmdy_parse_args, _CmdySyncStreamFromAsync,
                   _cmdy_compose_cmd)
 
 @pytest.mark.parametrize(
@@ -62,20 +62,6 @@ def test_parse_args_warnings():
         _cmdy_parse_args('', args=[], kwargs={'popen_encoding': None})
     with pytest.warns(UserWarning):
         _cmdy_parse_args('', args=[], kwargs={'popen_shell': True})
-
-
-def test_will():
-
-    def wrapper():
-        will = _cmdy_will()
-        return Diot(x=1, y=lambda: True, will=will)
-
-    assert wrapper().x == 1
-    will = wrapper().will
-    assert will == 'will'
-
-    will = wrapper()['will']
-    assert will is None
 
 def test_asnyc_to_sync():
 
