@@ -11,6 +11,7 @@
 # ----------------------------------------------------------
 import sys as _sys
 import fileinput as _fileinput
+from os import devnull as _devnull
 from functools import wraps as _wraps
 from threading import Event as _Event
 from shlex import quote as _quote
@@ -18,8 +19,7 @@ import warnings as _warnings
 import inspect as _inspect
 import ast as _ast
 from diot import Diot as _Diot
-# this is ok, it's banned internally
-from modkit import Modkit
+from modkit import modkit as _modkit
 from simpleconf import Config as _Config
 import curio as _curio
 from curio import subprocess as _subprocess
@@ -49,15 +49,15 @@ CMDY_CONFIG._load(
     'CMDY.osenv'
 )
 
-_CMDY_BACKED_ARGS = _Diot()
+_CMDY_BAKED_ARGS = _Diot()
 _CMDY_EVENT = _Event()
 
 # These are naming exceptions for convenience
 STDIN = -7
 STDOUT = -2
 STDERR = -8
-# or os.devnull?
-DEVNULL = '/dev/null'
+# or '/dev/null'?
+DEVNULL = _devnull
 
 # The actions that will put left side on hold
 # For example: cmdy.ls().h()
@@ -106,7 +106,8 @@ class CmdyReturnCodeError(Exception):
                     '',
                     f'  [   PID] {result.pid}',
                     '',
-                    f'  [   CMD] {result.cmd}',
+                    '  [   CMD] '
+                    f'{getattr(result, "piped_strcmds", result.cmd)}',
                     '']
 
             if result.stdout is None:
@@ -142,6 +143,7 @@ async def _cmdy_raise_return_code_error(aresult):
     result = _Diot(rc=aresult._rc,
                    pid=aresult.pid,
                    cmd=aresult.cmd,
+                   piped_strcmds=getattr(aresult, 'piped_strcmds', None),
                    holding=_Diot(okcode=aresult.holding.okcode),
                    _stdout_str=(await aresult.stdout.read()
                                 if aresult.stdout else ''),
@@ -214,7 +216,7 @@ def _cmdy_parse_args(name: str, args: tuple, kwargs: dict):
     ret_popenargs: _Diot = _Diot()
 
     base_kwargs = CMDY_CONFIG._use(name, 'default', copy=True)
-    base_kwargs.update(_CMDY_BACKED_ARGS)
+    base_kwargs.update(_CMDY_BAKED_ARGS)
     base_kwargs.update(kwargs)
 
     for key, val in base_kwargs.items():
@@ -327,8 +329,10 @@ def _cmdy_compose_cmd(args: list, kwargs: dict, *,
                 elif val is not True:
                     command.append(str(val))
 
-    command.extend(positionals if isinstance(positionals, list)
-                   else [positionals])
+    if not isinstance(positionals, (tuple, list)):
+        positionals = [positionals]
+
+    command.extend(str(pos) for pos in positionals)
 
     if shell:
         return shell + [' '.join(command)]
@@ -535,6 +539,8 @@ class CmdyHolding:
         """Put the command on hold"""
         # Whever hold is called
         self.data['hold'] = True
+        self.did, self.curr, self.will = self.curr, self.will, _cmdy_will()
+
         if self.data['async'] or len(self.data) > 2:
             raise CmdyActionError("Should be called in "
                                   "the first place: .h() or .hold()")
@@ -858,7 +864,7 @@ def plugin_add_property(cls):
         return func
     return decorator
 
-def _plugin_then(cls, func,  aliases=None, *,
+def _plugin_then(cls, func, aliases=None, *,
                  final: bool = False, hold_right: bool = False):
     aliases = aliases or []
     if not isinstance(aliases, list):
@@ -874,7 +880,7 @@ def _plugin_then(cls, func,  aliases=None, *,
         # Update actions
         self.did, self.curr, self.will = self.curr, self.will, _cmdy_will()
 
-        if self.curr in finals and self.will:
+        if self.curr in finals and self.will in _CMDY_HOLDING_LEFT:
             raise CmdyActionError("Action taken after a final action.")
         # Initialize data
         # Make it True to tell future actions that I have been called
@@ -912,7 +918,7 @@ def plugin_hold_then(alias_or_func=None,
     return lambda func: _plugin_then(CmdyHolding, func, aliases,
                                      final=final, hold_right=hold_right)
 
-def plugin_run_then(alias_or_func=None, *, final: bool=False):
+def plugin_run_then(alias_or_func=None, *, final: bool = False):
     """What to do when a command is running"""
     aliases = None if callable(alias_or_func) else alias_or_func
     func = alias_or_func if callable(alias_or_func) else None
@@ -985,6 +991,9 @@ class CmdyPluginRedirect:
             raise CmdyActionError("Don't know what to redirect. "
                                   "Expecting STDIN, STDOUT or STDERR")
 
+        # Since we are holding right, set did to ''
+        # to let the right action run
+        self.did = ''
         if not which and not self._onhold():
             #self.data.redirect = {}
             return self.run()
@@ -1019,7 +1028,7 @@ class CmdyPluginRedirect:
         which = self.data.get('redirect', {}).get('which', [STDOUT])
         return CmdyPluginRedirect._redirect(self, list(which), True, file)
 
-    @plugin_hold_then('r,redir', hold_right=False)
+    @plugin_hold_then('r,redir', hold_right=True)
     def redirect(self, *which):
         """Redirect the input/output"""
 
@@ -1084,18 +1093,6 @@ class CmdyPluginFg:
         self.data.foreground.stdin = stdin
         self.data.foreground.poll_interval = poll_interval
 
-
-        if ((stdin and self.stdin != _subprocess.PIPE) or
-                self.stdout != _subprocess.PIPE or
-                self.stderr != _subprocess.PIPE):
-            _warnings.warn("Previous redirected pipe will be ignored.")
-
-        # fileinput.input is good to use here
-        # as it has fileno()
-        self.stdin = _fileinput.input() if stdin else self.stdin
-        self.stdout = _subprocess.PIPE
-        self.stderr = _subprocess.PIPE
-
         if not self._onhold():
             return self.run()
         return self
@@ -1107,6 +1104,18 @@ class CmdyPluginFg:
 
         if not self.data.get('foreground'):
             return orig_run(self, wait)
+
+        if ((self.data.foreground.stdin and self.stdin != _subprocess.PIPE) or
+                self.stdout != _subprocess.PIPE or
+                self.stderr != _subprocess.PIPE):
+            _warnings.warn("Previous redirected pipe will be ignored.")
+
+        # fileinput.input is good to use here
+        # as it has fileno()
+        self.stdin = (_fileinput.input() if self.data.foreground.stdin
+                      else self.stdin)
+        self.stdout = _subprocess.PIPE
+        self.stderr = _subprocess.PIPE
 
         ret = orig_run(self, False)
 
@@ -1200,7 +1209,7 @@ class CmdyPluginPipe:
         # which will be set if .pipe() is called
         if (not other._onhold(check_event=False) and
                 not other.data.get('pipe', {}).get('which')):
-            self.event.clear()
+            _CMDY_EVENT.clear()
             return other.run()
 
         return other
@@ -1208,6 +1217,9 @@ class CmdyPluginPipe:
     @plugin_hold_then('p')
     def pipe(self, which=None):
         """Allow command piping"""
+        if self.data.get('pipe'):
+            raise CmdyActionError("Unconsumed piping action.")
+
         # initialize data
         which = which or STDOUT
         self.data.pipe.which = which
@@ -1216,7 +1228,7 @@ class CmdyPluginPipe:
                 (which == STDERR and self.stderr != _subprocess.PIPE)):
 
             raise CmdyActionError("Cannot pipe from a redirected PIPE.")
-        self.event.set()
+        _CMDY_EVENT.set()
         return self
 
     @plugin_add_method(CmdyHolding)
@@ -1467,17 +1479,31 @@ CMDY_PLUGIN_REDIRECT = CmdyPluginRedirect()
 CMDY_PLUGIN_PIPE = CmdyPluginPipe()
 CMDY_PLUGIN_VALUE = CmdyPluginValue()
 
+@_modkit.delegate
 def _modkit_delegate(name):
     return Cmdy(name)
 
+@_modkit.call
+def _modkit_call(module, assigned_to, **kwargs):
+    # Module is deeply copied
+    # But we need to reference all Exceptions
+    # So that we can do:
+    # ```python
+    # from cmdy import CmdyExecNotFoundError
+    # sh = cmdy()
+    # sh.nonexisting()
+    # # raises CmdyExecNotFoundError
+    # # instead of sh.CmdyExecNotFoundError
+    newmod = module.__bake__(assigned_to)
+    newmod.CmdyBakingError = module.CmdyBakingError
+    newmod.CmdyActionError = module.CmdyActionError
+    newmod.CmdyTimeoutError = module.CmdyActionError
+    newmod.CmdyExecNotFoundError = module.CmdyExecNotFoundError
+    newmod.CmdyReturnCodeError = module.CmdyReturnCodeError
 
-def _modkit_call(oldmod, newmod, **kwargs):
-    newmod.CMDY_CONFIG = oldmod.CMDY_CONFIG.copy()
-    newmod._CMDY_BACKED_ARGS = oldmod._CMDY_BACKED_ARGS.copy()
-    newmod._CMDY_BACKED_ARGS.update(kwargs)
-    print(newmod._CMDY_BACKED_ARGS, id(newmod._CMDY_BACKED_ARGS), id(oldmod._CMDY_BACKED_ARGS))
-    newmod._CMDY_EVENT = _Event()
+    newmod._CMDY_BAKED_ARGS.update(module._CMDY_BAKED_ARGS)
+    newmod._CMDY_BAKED_ARGS.update(kwargs)
+    return newmod
 
-# not banning anything
+# not banning anything with modkit
 # but conventionally names start with _ should not be exported
-Modkit()

@@ -5,17 +5,21 @@ from contextlib import contextmanager
 from diot import Diot
 import pytest
 import cmdy
-from cmdy import *
+from cmdy import (CmdyHolding, _CMDY_EVENT, _cmdy_parse_args, CmdyResult,
+                  CmdyBakingError, STDOUT, STDERR, STDIN, DEVNULL,
+                  CMDY_PLUGIN_ITER,
+                  CmdyActionError, CmdyAsyncResult, CmdyTimeoutError,
+                  CmdyReturnCodeError, CmdyExecNotFoundError)
 import curio
 
 def teardown_function():
-    CMDY_EVENT.clear()
+    _CMDY_EVENT.clear()
 
 @pytest.fixture
 def no_iter():
-    ITER.disable()
+    CMDY_PLUGIN_ITER.disable()
     yield
-    ITER.enable()
+    CMDY_PLUGIN_ITER.enable()
 
 @pytest.fixture
 def captured():
@@ -33,7 +37,7 @@ def captured():
 
 def test_holding_new():
 
-    ret = CmdyHolding(*cmdy_util.parse_args('echo', ['echo', '123'], {}))
+    ret = CmdyHolding(*_cmdy_parse_args('echo', ['echo', '123'], {}))
     assert isinstance(ret, CmdyResult)
 
 def test_normal_run():
@@ -217,10 +221,30 @@ def test_iter_stderr():
 
 def test_module_baking():
     sh = cmdy(n=True)
-    assert sh.echo(123).strcmd == 'echo -n 123'
+    assert id(sh._CMDY_EVENT) != id(_CMDY_EVENT)
+    assert id(sh._CMDY_BAKED_ARGS) != id(cmdy._CMDY_BAKED_ARGS)
+    assert sh.Cmdy('echo')(_=123).strcmd == 'echo -n 123'
     assert cmdy.echo(123).strcmd == 'echo 123'
-    assert id(sh.CMDY_EVENT) != id(CMDY_EVENT)
-    assert id(sh.CMDY_BACKED_ARGS) != id(cmdy.CMDY_BACKED_ARGS)
+
+    # test event blocking
+    cmdy.echo().p()
+    assert cmdy._CMDY_EVENT.is_set()
+    assert not sh._CMDY_EVENT.is_set()
+    c = cmdy.echo() # suppose to run but locked
+    assert isinstance(c, CmdyHolding)
+    c = sh.echo() # ran
+    assert isinstance(c, sh.CmdyResult)
+
+    sh2 = sh(e=True)
+    c = sh2.echo(_=1).h()
+    assert c.strcmd == 'echo -n -e 1'
+
+    assert (sh.CmdyExecNotFoundError == sh2.CmdyExecNotFoundError ==
+            CmdyExecNotFoundError)
+
+    with pytest.raises(CmdyExecNotFoundError):
+        sh2.nonexisting()
+
 
 def test_subcommand():
     assert cmdy.echo.a() == 'a\n'
@@ -283,6 +307,10 @@ def test_piped_cmds():
 
     assert cmdy.echo(123).piped_cmds == [['echo', '123']]
     assert cmdy.echo(123).piped_strcmds == ['echo 123']
+    _CMDY_EVENT.clear()
+    c = cmdy.echo(123)
+    assert isinstance(c, CmdyResult)
+    assert c.piped_cmds == [['echo', '123']]
 
 def test_reprs():
     c = cmdy.echo(123).h()
@@ -510,7 +538,7 @@ def test_mixed_actions_hold_then():
 
     p = cmdy.echo(123).h().p()
     # release the lock
-    CMDY_EVENT.clear()
+    _CMDY_EVENT.clear()
     assert isinstance(p, CmdyHolding)
 
     c = cmdy.echo(123).h()
@@ -536,7 +564,7 @@ def test_mixed_actions_hold_then():
     c = cmdy.echo(123).h()
     r = c.p()
     assert isinstance(r, CmdyHolding)
-    assert CMDY_EVENT.is_set()
+    assert _CMDY_EVENT.is_set()
 
 def test_mixed_actions_async_then():
     # actions could be
@@ -577,7 +605,7 @@ def test_mixed_actions_async_then():
     assert isinstance(it, CmdyAsyncResult)
 
     c = cmdy.echo().a().p()
-    CMDY_EVENT.clear()
+    _CMDY_EVENT.clear()
     assert isinstance(c, CmdyHolding)
 
 def test_mixed_actions_async_then_fg():
@@ -607,7 +635,7 @@ def test_mixed_actions_redir_then():
         r.h()
 
     a = cmdy.echo().r().a()
-    assert isinstance(a, CmdyAsyncResult)
+    assert isinstance(a, CmdyHolding)
 
     h = cmdy.echo().h()
     x = h.r().a().run()
@@ -624,15 +652,20 @@ def test_mixed_actions_redir_then():
     with pytest.raises(CmdyActionError):
         r.r().r()
 
-    with pytest.raises(CmdyActionError):
-        cmdy.echo().r().fg() > DEVNULL
-
     r = cmdy.echo().r() > DEVNULL
     with pytest.raises(AttributeError):
         r.fg()
 
-    with pytest.raises(CmdyActionError):
-        cmdy.echo().r().pipe()
+
+    c = cmdy.echo().r().pipe()
+    assert isinstance(c, CmdyHolding)
+
+def test_mixed_actions_redir_then_fg():
+    with pytest.warns(UserWarning) as w:
+        c = cmdy.echo(123).r().fg() > DEVNULL
+    assert isinstance(c, CmdyResult)
+    assert c.stdout == ''
+    assert str(w.pop().message) == 'Previous redirected pipe will be ignored.'
 
 def test_mixed_actions_fg_then():
     # actions could be
@@ -654,7 +687,46 @@ def test_mixed_actions_iter_then():
         cmdy.echo().h().iter().r()
 
 def test_mixed_actions_pipe_then():
+    # actions could be
+    # hold
+    # async_
+    # redirect
+    # fg
+    # iter
+    # pipe
+    c = cmdy.echo().h().pipe().r()
+    assert isinstance(c, CmdyHolding)
+    _CMDY_EVENT.clear()
 
-    # pipe is also final
     with pytest.raises(CmdyActionError):
-        cmdy.echo().h().pipe().r()
+        cmdy.echo().p().h()
+
+    c = cmdy.echo().p().a()
+    assert isinstance(c, CmdyHolding)
+    _CMDY_EVENT.clear()
+
+    c = cmdy.bash(c='echo "1\n2\n3" 1>&2').p().r(STDERR) ^ STDOUT | cmdy.grep(2)
+    assert c.str() == '2\n'
+
+    with pytest.raises(CmdyActionError) as ex:
+        cmdy.echo().p().p()
+    assert 'Unconsumed piping' in str(ex.value)
+
+def test_mixed_actions_pipe_then_fg(capsys):
+
+    c = cmdy.bash(
+        c='echo 123 1>&2 && echo 456'
+    ).p(STDERR).fg() | cmdy.grep(4, cmdy_okcode='0,1')
+    assert capsys.readouterr().out == '456\n'
+    assert c.str() == '' # have been redirected by fg
+
+def test_mixed_actions_pipe_then_iter(capsys):
+    c = cmdy.bash(
+        c='echo "1\n2\n3" 1>&2'
+    ).p(STDERR).iter(STDOUT)
+    d = c | cmdy.grep(2, cmdy_okcode='0,1')
+    assert isinstance(d, CmdyResult)
+    assert isinstance(c, CmdyHolding)
+    assert d == '2\n'
+
+

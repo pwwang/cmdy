@@ -2,14 +2,17 @@ import pytest
 import sys
 import cmdy
 from diot import Diot
-from cmdy import *
+from cmdy import (cmdy_plugin, plugin_add_method, plugin_add_property,
+                  CmdyHolding, CmdyActionError, _cmdy_hook_class,
+                  CmdyAsyncResult, _cmdy_parse_args, STDERR,
+                  plugin_hold_then, plugin_run_then, plugin_run_then_async)
 import curio
 
 # testing errors, async and combined use of iter, pipe, redirect
 # normal functions are tested in test_cmdy.py
 
 def test_plugin():
-    @plugin
+    @cmdy_plugin
     class Plugin:
         def method(self):
             pass
@@ -29,11 +32,11 @@ def test_plugin_add_method():
         def __init__(self):
             self.base = 1
 
-    _hook_class(Base)
+    _cmdy_hook_class(Base)
 
-    @plugin
+    @cmdy_plugin
     class Plugin:
-        @add_method(Base)
+        @plugin_add_method(Base)
         def add(self):
             return self.base + 1
 
@@ -57,11 +60,11 @@ def test_plugin_add_method_override():
         def add(self):
             return self.base + 10
 
-    _hook_class(Base)
+    _cmdy_hook_class(Base)
 
-    @plugin
+    @cmdy_plugin
     class Plugin:
-        @add_method(Base)
+        @plugin_add_method(Base)
         def add(self):
             return self._original('add')(self) + 1
 
@@ -86,17 +89,17 @@ def test_plugin_add_method_multi_override():
         def add(self):
             return self.base + 10
 
-    _hook_class(Base)
+    _cmdy_hook_class(Base)
 
-    @plugin
+    @cmdy_plugin
     class Plugin:
-        @add_method(Base)
+        @plugin_add_method(Base)
         def add(self):
             return self._original('add')(self) + 1
 
-    @plugin
+    @cmdy_plugin
     class Plugin2:
-        @add_method(Base)
+        @plugin_add_method(Base)
         def add(self):
             return self._original('add')(self) * 2
 
@@ -114,17 +117,17 @@ def test_plugin_add_method_multi_override_disable():
         def add(self):
             return self.base + 10
 
-    _hook_class(Base)
+    _cmdy_hook_class(Base)
 
-    @plugin
+    @cmdy_plugin
     class Plugin:
-        @add_method(Base)
+        @plugin_add_method(Base)
         def add(self):
             return self._original('add')(self) + 1
 
-    @plugin
+    @cmdy_plugin
     class Plugin2:
-        @add_method(Base)
+        @plugin_add_method(Base)
         def add(self):
             return self._original('add')(self) * 2
 
@@ -139,11 +142,11 @@ def test_plugin_add_property():
     class Base:
         def __init__(self):
             self.base = 1
-    _hook_class(Base)
+    _cmdy_hook_class(Base)
 
-    @plugin
+    @cmdy_plugin
     class Plugin:
-        @add_property(Base)
+        @plugin_add_property(Base)
         def base1(self):
             return self.base + 1
 
@@ -168,11 +171,11 @@ def test_plugin_add_property_override():
         def base1(self):
             return self.base + 10
 
-    _hook_class(Base)
+    _cmdy_hook_class(Base)
 
-    @plugin
+    @cmdy_plugin
     class Plugin:
-        @add_property(Base)
+        @plugin_add_property(Base)
         def base1(self):
             return self._original('base1').fget(self) + 1
 
@@ -196,17 +199,17 @@ def test_plugin_add_property_multi_override():
         def base1(self):
             return self.base + 10
 
-    _hook_class(Base)
+    _cmdy_hook_class(Base)
 
-    @plugin
+    @cmdy_plugin
     class Plugin:
-        @add_property(Base)
+        @plugin_add_property(Base)
         def base1(self):
             return self._original('base1').fget(self) + 1
 
-    @plugin
+    @cmdy_plugin
     class Plugin2:
-        @add_property(Base)
+        @plugin_add_property(Base)
         def base1(self):
             return self._original('base1').fget(self) * 2
 
@@ -225,17 +228,17 @@ def test_plugin_add_property_multi_override():
         def base1(self):
             return self.base + 10
 
-    _hook_class(Base)
+    _cmdy_hook_class(Base)
 
-    @plugin
+    @cmdy_plugin
     class Plugin:
-        @add_property(Base)
+        @plugin_add_property(Base)
         def base1(self):
             return self._original('base1').fget(self) + 1
 
-    @plugin
+    @cmdy_plugin
     class Plugin2:
-        @add_property(Base)
+        @plugin_add_property(Base)
         def base1(self):
             return self._original('base1').fget(self) * 2
 
@@ -247,9 +250,9 @@ def test_plugin_add_property_multi_override():
 
 def test_hold_then():
 
-    @plugin
+    @cmdy_plugin
     class Plugin:
-        @hold_then
+        @plugin_hold_then
         def test(self):
             self.stdin = 123
             return self
@@ -257,14 +260,14 @@ def test_hold_then():
     assert callable(Plugin.test.enable)
     p = Plugin()
     assert callable(CmdyHolding.test)
-    h = CmdyHolding(*cmdy_util.parse_args('echo', ['echo', '123'], {}), will='test').test()
+    h = CmdyHolding(*_cmdy_parse_args('echo', ['echo', '123'], {}), will='test').test()
     assert h.stdin == 123
 
 def test_run_then():
 
-    @plugin
+    @cmdy_plugin
     class Plugin:
-        @run_then
+        @plugin_run_then
         def ev(self):
             return eval(self.stdout)
 
@@ -275,15 +278,15 @@ def test_run_then():
 
 def test_final():
 
-    with pytest.raises(cmdy.cmdy_util.CmdyActionError):
+    with pytest.raises(CmdyActionError):
         cmdy.echo().h().fg().iter()
 
 def test_run_then_async():
 
-    @plugin
+    @cmdy_plugin
     class Plugin:
 
-        @run_then_async('o')
+        @plugin_run_then_async('o')
         async def out(self):
             ret = []
             async for line in self:
@@ -291,7 +294,7 @@ def test_run_then_async():
 
             return ''.join(ret)
 
-        @run_then_async
+        @plugin_run_then_async
         async def list(self):
             ret = []
             async for line in self:

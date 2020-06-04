@@ -2,7 +2,8 @@ import pytest
 import time
 import curio
 from diot import Diot
-from cmdy import *
+from cmdy import (_cmdy_parse_args, _cmdy_will, _CmdySyncStreamFromAsync,
+                  _cmdy_compose_cmd)
 
 @pytest.mark.parametrize(
     'args,kwargs,ret_args,ret_kwargs,ret_cfgargs,ret_popenargs', [
@@ -38,7 +39,7 @@ from cmdy import *
 def test_parse_args(args, kwargs, ret_args, ret_kwargs,
                     ret_cfgargs, ret_popenargs):
 
-    x_args, x_kwargs, x_cfgargs, x_popenargs = cmdy_util.parse_args('', args, kwargs)
+    x_args, x_kwargs, x_cfgargs, x_popenargs = _cmdy_parse_args('', args, kwargs)
     assert x_args == ret_args
     assert x_kwargs == ret_kwargs
     for key, val in ret_cfgargs.items():
@@ -50,23 +51,23 @@ def test_parse_args(args, kwargs, ret_args, ret_kwargs,
 def test_parse_args_warnings():
 
     with pytest.warns(UserWarning):
-        args, kwargs, _, _ = cmdy_util.parse_args('', args=[{"x":1}],
+        args, kwargs, _, _ = _cmdy_parse_args('', args=[{"x":1}],
                                                   kwargs={'x': 2})
     assert args == []
     assert kwargs == {'x': 2}
 
     with pytest.warns(UserWarning):
-        cmdy_util.parse_args('', args=[], kwargs={'popen_stdin': 2})
+        _cmdy_parse_args('', args=[], kwargs={'popen_stdin': 2})
     with pytest.warns(UserWarning):
-        cmdy_util.parse_args('', args=[], kwargs={'popen_encoding': None})
+        _cmdy_parse_args('', args=[], kwargs={'popen_encoding': None})
     with pytest.warns(UserWarning):
-        cmdy_util.parse_args('', args=[], kwargs={'popen_shell': True})
+        _cmdy_parse_args('', args=[], kwargs={'popen_shell': True})
 
 
 def test_will():
 
     def wrapper():
-        will = cmdy_util.will()
+        will = _cmdy_will()
         return Diot(x=1, y=lambda: True, will=will)
 
     assert wrapper().x == 1
@@ -80,18 +81,18 @@ def test_asnyc_to_sync():
 
     p = curio.subprocess.Popen(['echo', '-e', '1\\n2\\n3'],
                                stdout=curio.subprocess.PIPE)
-    stream = cmdy_util.SyncStreamFromAsync(p.stdout)
+    stream = _CmdySyncStreamFromAsync(p.stdout)
     assert stream.dump() == b'1\n2\n3\n'
 
     p = curio.subprocess.Popen(['echo', '-e', '1\\n2\\n3'],
                                stdout=curio.subprocess.PIPE)
-    stream = cmdy_util.SyncStreamFromAsync(p.stdout, encoding='utf-8')
+    stream = _CmdySyncStreamFromAsync(p.stdout, encoding='utf-8')
     assert stream.dump() == '1\n2\n3\n'
 
     p = curio.subprocess.Popen(['echo', '-e', '1\\n2\\n3'],
                                stdout=curio.subprocess.PIPE)
 
-    stream = cmdy_util.SyncStreamFromAsync(p.stdout)
+    stream = _CmdySyncStreamFromAsync(p.stdout)
     assert next(stream) == b'1\n'
     assert next(stream) == b'2\n'
     assert next(stream) == b'3\n'
@@ -102,7 +103,7 @@ def test_asnyc_to_sync():
     p = curio.subprocess.Popen(['echo', '-e', '1\\n2\\n3'],
                                stdout=curio.subprocess.PIPE)
 
-    stream = cmdy_util.SyncStreamFromAsync(p.stdout, encoding='utf-8')
+    stream = _CmdySyncStreamFromAsync(p.stdout, encoding='utf-8')
     assert next(stream) == '1\n'
     assert next(stream) == '2\n'
     assert next(stream) == '3\n'
@@ -116,7 +117,7 @@ def test_asnyc_to_sync():
                                stdout=curio.subprocess.PIPE)
 
     tic = time.time()
-    stream = iter(cmdy_util.SyncStreamFromAsync(p.stdout, encoding='utf-8'))
+    stream = iter(_CmdySyncStreamFromAsync(p.stdout, encoding='utf-8'))
 
     assert next(stream) == '1\n'
     assert next(stream) == '2\n'
@@ -140,6 +141,6 @@ def test_asnyc_to_sync():
       '--xyz=3', '--xyz=4', 'end']),
 ])
 def test_compose_cmd(args, kwargs, shell, prefix, sep, dupkey, expected):
-    assert cmdy_util.compose_cmd(args, kwargs,
-                            shell=shell, prefix=prefix, sep=sep,
-                            dupkey=dupkey) == expected
+    assert _cmdy_compose_cmd(args, kwargs,
+                             shell=shell, prefix=prefix, sep=sep,
+                             dupkey=dupkey) == expected
