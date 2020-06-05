@@ -401,6 +401,7 @@ class CmdyResult:
             else:
                 self._rc = _curio.run(self.proc.wait())
         except _curio.TaskTimeout:
+            self.proc.kill()
             raise CmdyTimeoutError(
                 f"Timeout after {self.holding.timeout} seconds."
             ) from None
@@ -491,6 +492,7 @@ class CmdyAsyncResult(CmdyResult):
             else:
                 self._rc = await self.proc.wait()
         except _curio.TaskTimeout:
+            self.proc.kill()
             raise CmdyTimeoutError("Timeout after "
                                    f"{self.holding.timeout} seconds.")
         else:
