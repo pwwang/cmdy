@@ -6,8 +6,35 @@ from cmdy import CMDY_CONFIG, _CMDY_BAKED_ARGS
 from cmdy.cmdy_util import (
     _cmdy_parse_args, _CmdySyncStreamFromAsync,
     _cmdy_compose_arg_segment, _cmdy_parse_single_kwarg,
-    _cmdy_compose_cmd, _cmdy_fix_popen_config
+    _cmdy_compose_cmd, _cmdy_fix_popen_config,
+    _cmdy_property_called_as_method,
+    _cmdy_property_or_method
 )
+
+def test_cmdy_property_called_as_method():
+    class C:
+        @property
+        def c(self):
+            ret = _cmdy_property_called_as_method()
+            if ret:
+                return ret
+            return lambda: ret
+
+    c = C()
+    assert c.c
+    assert not c.c()
+
+def test_cmdy_property_or_method():
+    class C:
+        @property
+        @_cmdy_property_or_method
+        def c(self, n=1):
+            return n
+
+    c = C()
+    assert c.c == 1
+    x = c.c(2)
+    assert x == 2
 
 @pytest.mark.parametrize('cmd_args,config,expected', [
     ({'a': 1, 'ab': 2}, {}, ['-a', '1', '--ab', '2']),

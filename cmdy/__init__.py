@@ -31,9 +31,9 @@ from .cmdy_util import (STDIN, STDOUT, STDERR, DEVNULL,
                         CmdyExecNotFoundError, CmdyReturnCodeError,
                         _cmdy_raise_return_code_error,
                         _cmdy_compose_cmd, _cmdy_parse_args,
+                        _cmdy_property_or_method,
                         _CmdySyncStreamFromAsync)
-from .cmdy_plugin import (_cmdy_hook_class, _plugin_then, cmdy_plugin,
-                          plugin_add_method, plugin_add_property)
+from .cmdy_plugin import _cmdy_hook_class, _CmdyPluginProxy
 # We have to put this in the final position to
 # make modkit detect the submodules
 # pylint: disable=wrong-import-order
@@ -251,6 +251,8 @@ class CmdyHolding:
                 self.will in _CMDY_HOLDING_LEFT or
                 self.did in _CMDY_HOLDING_RIGHT)
 
+    @property
+    @_cmdy_property_or_method
     def async_(self):
         """Put command in async mode"""
         if self.data['async']:
@@ -258,7 +260,7 @@ class CmdyHolding:
 
         self.data['async'] = True
         # update actions
-        self.did, self.curr, self.will = self.curr, self.will, _will()
+        self.did, self.curr, self.will = self.curr, self.will, _will(2)
 
         if self._onhold():
             return self
@@ -266,11 +268,13 @@ class CmdyHolding:
 
     a = async_
 
+    @property
+    @_cmdy_property_or_method
     def hold(self):
         """Put the command on hold"""
         # Whever hold is called
         self.data['hold'] = True
-        self.did, self.curr, self.will = self.curr, self.will, _will()
+        self.did, self.curr, self.will = self.curr, self.will, _will(2)
 
         if self.data['async'] or len(self.data) > 2:
             raise CmdyActionError("Should be called in "
@@ -459,65 +463,22 @@ class CmdyAsyncResult(CmdyResult):
 _cmdy_hook_class(CmdyHolding)
 _cmdy_hook_class(CmdyResult)
 # CmdyAsyncResult is a subclass of CmdyResult
-
-# We can't put this in submodules since
-# it requries explictly the classes
-# If we put them in submodules, plugins will have
-# no effects on baked modules
-def plugin_hold_then(alias_or_func=None,
-                     *, final: bool = False,
-                     hold_right: bool = True):
-    """What to do if a command is holding
-
-    Args:
-        alias_or_func (str|list|Callable): Direct decorator or with kwargs
-        final (bool): If this is a final action
-        hold_right (bool): Tell previous actions that I should be on hold.
-                           But make sure running will be taken good care of.
-    """
-    aliases = None if callable(alias_or_func) else alias_or_func
-    func = alias_or_func if callable(alias_or_func) else None
-
-    if func:
-        return _plugin_then(CmdyHolding, func, aliases,
-                            _CMDY_HOLDING_FINALS, _CMDY_RESULT_FINALS,
-                            _CMDY_HOLDING_LEFT, _CMDY_HOLDING_RIGHT,
-                            final=final, hold_right=hold_right)
-
-    return lambda func: _plugin_then(CmdyHolding, func, aliases,
-                                     _CMDY_HOLDING_FINALS, _CMDY_RESULT_FINALS,
-                                     _CMDY_HOLDING_LEFT, _CMDY_HOLDING_RIGHT,
-                                     final=final, hold_right=hold_right)
-
-def plugin_run_then(alias_or_func=None, *, final: bool = False):
-    """What to do when a command is running"""
-    aliases = None if callable(alias_or_func) else alias_or_func
-    func = alias_or_func if callable(alias_or_func) else None
-
-    if func:
-        return _plugin_then(CmdyResult, func, aliases,
-                            _CMDY_HOLDING_FINALS, _CMDY_RESULT_FINALS,
-                            _CMDY_HOLDING_LEFT, _CMDY_HOLDING_RIGHT,
-                            final=final)
-
-    return lambda func: _plugin_then(CmdyResult, func, aliases,
-                                     _CMDY_HOLDING_FINALS, _CMDY_RESULT_FINALS,
-                                     _CMDY_HOLDING_LEFT, _CMDY_HOLDING_RIGHT,
-                                     final=final)
-
-def plugin_run_then_async(alias_or_func):
-    """What to do when a command is running asyncronously"""
-    aliases = None if callable(alias_or_func) else alias_or_func
-    func = alias_or_func if callable(alias_or_func) else None
-
-    if func:
-        return _plugin_then(CmdyAsyncResult, func, aliases,
-                            _CMDY_HOLDING_FINALS, _CMDY_RESULT_FINALS,
-                            _CMDY_HOLDING_LEFT, _CMDY_HOLDING_RIGHT)
-
-    return lambda func: _plugin_then(CmdyAsyncResult, func, aliases,
-                                     _CMDY_HOLDING_FINALS, _CMDY_RESULT_FINALS,
-                                     _CMDY_HOLDING_LEFT, _CMDY_HOLDING_RIGHT)
+_CMDY_PLUGIN_PROXY = _CmdyPluginProxy(CmdyHolding,
+                                      CmdyResult,
+                                      CmdyAsyncResult,
+                                      _CMDY_HOLDING_LEFT,
+                                      _CMDY_HOLDING_RIGHT,
+                                      _CMDY_HOLDING_FINALS,
+                                      _CMDY_RESULT_FINALS)
+# Expose hooks
+# pylint: disable=invalid-name
+cmdy_plugin = _CMDY_PLUGIN_PROXY.hook_plugin()
+cmdy_plugin_add_method = _CMDY_PLUGIN_PROXY.hook_add_method()
+cmdy_plugin_add_property = _CMDY_PLUGIN_PROXY.hook_add_property()
+cmdy_plugin_hold_then = _CMDY_PLUGIN_PROXY.hook_hold_then()
+cmdy_plugin_run_then = _CMDY_PLUGIN_PROXY.hook_run_then()
+cmdy_plugin_async_run_then = _CMDY_PLUGIN_PROXY.hook_async_run_then()
+# pylint: enable=invalid-name
 
 # pylint: disable=access-member-before-definition
 # pylint: disable=attribute-defined-outside-init
@@ -581,17 +542,17 @@ class CmdyPluginRedirect:
 
         return self
 
-    @plugin_add_method(CmdyHolding)
+    @cmdy_plugin_add_method(CmdyHolding)
     def __gt__(self, file):
         which = self.data.get('redirect', {}).get('which', [STDOUT])
         return CmdyPluginRedirect._redirect(self, list(which), False, file)
 
-    @plugin_add_method(CmdyHolding)
+    @cmdy_plugin_add_method(CmdyHolding)
     def __lt__(self, file):
         which = self.data.get('redirect', {}).get('which', [STDOUT])
         return CmdyPluginRedirect._redirect(self, list(which), False, file)
 
-    @plugin_add_method(CmdyHolding)
+    @cmdy_plugin_add_method(CmdyHolding)
     def __xor__(self, file):
         """Priority issue with gt (>)
         We need brackets to ensure the order:
@@ -603,12 +564,12 @@ class CmdyPluginRedirect:
             return self.__lt__(file)
         return self.__gt__(file)
 
-    @plugin_add_method(CmdyHolding)
+    @cmdy_plugin_add_method(CmdyHolding)
     def __rshift__(self, file):
         which = self.data.get('redirect', {}).get('which', [STDOUT])
         return CmdyPluginRedirect._redirect(self, list(which), True, file)
 
-    @plugin_hold_then('r,redir', hold_right=True)
+    @cmdy_plugin_hold_then('r,redir', hold_right=True)
     def redirect(self, *which):
         """Redirect the input/output"""
 
@@ -681,7 +642,7 @@ class CmdyPluginFg:
         else:
             await CmdyPluginFg._feed(self, poll_interval)
 
-    @plugin_hold_then('fg', final=True, hold_right=False)
+    @cmdy_plugin_hold_then('fg', final=True, hold_right=False)
     def foreground(self, stdin: bool = False,
                    poll_interval: bool = .1
                    ): #-> Union[CmdyHolding, CmdyResult]
@@ -694,7 +655,7 @@ class CmdyPluginFg:
             return self.run()
         return self
 
-    @plugin_add_method(CmdyHolding)
+    @cmdy_plugin_add_method(CmdyHolding)
     def run(self, wait=None):
         """Run the command and bump stdout/stderr to sys'"""
         orig_run = self._original('run')
@@ -730,7 +691,7 @@ class CmdyPluginPipe:
     Allow piping from one command to another
     `cmdy.ls().pipe() | cmdy.cat()`
     """
-    @plugin_add_property(CmdyResult)
+    @cmdy_plugin_add_property(CmdyResult)
     def piped_cmds(self):
         """Get cmds that along the piping path
 
@@ -745,7 +706,7 @@ class CmdyPluginPipe:
             return piped_from.piped_cmds + [self.cmd]
         return [self.cmd]
 
-    @plugin_add_property(CmdyResult)
+    @cmdy_plugin_add_property(CmdyResult)
     def piped_strcmds(self):
         """Get cmds that along the piping path
 
@@ -760,7 +721,7 @@ class CmdyPluginPipe:
             return piped_from.piped_strcmds + [self.strcmd]
         return [self.strcmd]
 
-    @plugin_add_property(CmdyHolding)
+    @cmdy_plugin_add_property(CmdyHolding)
     def piped_cmds_(self):
         """Get cmds that along the piping path
 
@@ -775,7 +736,7 @@ class CmdyPluginPipe:
             return piped_from.piped_cmds + [self.cmd]
         return [self.cmd]
 
-    @plugin_add_property(CmdyHolding)
+    @cmdy_plugin_add_property(CmdyHolding)
     def piped_strcmds_(self):
         """Get cmds that along the piping path
 
@@ -790,7 +751,7 @@ class CmdyPluginPipe:
             return piped_from.piped_strcmds + [self.strcmd]
         return [self.strcmd]
 
-    @plugin_add_method(CmdyHolding)
+    @cmdy_plugin_add_method(CmdyHolding)
     def __or__(self, other: CmdyHolding):
 
         if not self.data.get('pipe'):
@@ -814,7 +775,7 @@ class CmdyPluginPipe:
 
         return other
 
-    @plugin_hold_then('p')
+    @cmdy_plugin_hold_then('p')
     def pipe(self, which=None):
         """Allow command piping"""
         if self.data.get('pipe'):
@@ -831,7 +792,7 @@ class CmdyPluginPipe:
         _CMDY_EVENT.set()
         return self
 
-    @plugin_add_method(CmdyHolding)
+    @cmdy_plugin_add_method(CmdyHolding)
     def run(self, wait=None):
         """From from prior piped command"""
         orig_run = self._original('run')
@@ -853,11 +814,11 @@ class CmdyPluginIter:
     """Plugin: iter
     Iterator over results
     """
-    @plugin_add_method(CmdyResult)
+    @cmdy_plugin_add_method(CmdyResult)
     def __iter__(self):
         return self
 
-    @plugin_add_property(CmdyResult)
+    @cmdy_plugin_add_property(CmdyResult)
     def stdout(self):
         """Get the iterable of stdout"""
 
@@ -880,7 +841,7 @@ class CmdyPluginIter:
             self._stdout = self._stdout.dump()
         return self._stdout
 
-    @plugin_add_property(CmdyResult)
+    @cmdy_plugin_add_property(CmdyResult)
     def stderr(self):
         """Get the iterable of stderr"""
 
@@ -903,11 +864,11 @@ class CmdyPluginIter:
             self._stderr = self._stderr.dump()
         return self._stderr
 
-    @plugin_add_method(CmdyResult)
+    @cmdy_plugin_add_method(CmdyResult)
     def __next__(self):
         return self.next()
 
-    @plugin_add_method(CmdyResult)
+    @cmdy_plugin_add_method(CmdyResult)
     def next(self, timeout=None):
         """Get next row, with a timeout limit
         If nothing produced after the timeout, returns an empty string
@@ -929,7 +890,7 @@ class CmdyPluginIter:
             self.wait()
             raise
 
-    @plugin_run_then('it')
+    @cmdy_plugin_run_then('it')
     def iter(self, which=None): # pylint: disable=redefined-builtin
         """Iterator over STDOUT or STDERR of a CmdyResult object"""
 
@@ -946,7 +907,7 @@ class CmdyPluginIter:
 
         return self
 
-    @plugin_hold_then('it', final=True, hold_right=False)
+    @cmdy_plugin_hold_then('it', final=True, hold_right=False)
     def iter_(self, which=None):
         """Put holding on running and iterator over STDOUT or STDERR"""
         self.should_wait = False
@@ -960,7 +921,7 @@ class CmdyPluginValue:
     """Plugins: Value casting
     This is blocking in sync mode
     """
-    @plugin_run_then
+    @cmdy_plugin_run_then
     def str(self, which=None): # pylint: disable=redefined-builtin
         """Fetch the results as a string"""
         which = which or STDOUT
@@ -994,7 +955,7 @@ class CmdyPluginValue:
         setattr(self, '_stdout_str' if which == STDOUT else '_stderr_str', ret)
         return ret
 
-    @plugin_run_then
+    @cmdy_plugin_run_then
     async def astr(self, which=None):
         """Async version of str"""
 
@@ -1030,44 +991,44 @@ class CmdyPluginValue:
         setattr(self, '_stdout_str' if which == STDOUT else '_stderr_str', ret)
         return ret
 
-    @plugin_add_method(CmdyResult)
+    @cmdy_plugin_add_method(CmdyResult)
     def __contains__(self, item):
         return item in self.str()
 
-    @plugin_add_method(CmdyResult)
+    @cmdy_plugin_add_method(CmdyResult)
     def __eq__(self, other):
         return self.str() == other
 
-    @plugin_add_method(CmdyResult)
+    @cmdy_plugin_add_method(CmdyResult)
     def __ne__(self, other):
         return not self.__eq__(other)
 
-    @plugin_add_method(CmdyResult)
+    @cmdy_plugin_add_method(CmdyResult)
     def __str__(self):
         return self.str()
 
-    @plugin_add_method(CmdyResult)
+    @cmdy_plugin_add_method(CmdyResult)
     def __getattr__(self, name):
         if name in dir('') and not name.startswith('__'):
             return getattr(self.str(), name)
         return self.__getattribute__(name)
 
-    @plugin_run_then
+    @cmdy_plugin_run_then
     def int(self, which=None): # pylint: disable=redefined-builtin
         """Cast value to int"""
         return int(self.str(which))
 
-    @plugin_run_then
+    @cmdy_plugin_run_then
     async def aint(self, which=None):
         """Async version of int"""
         return int(await self.astr(which))
 
-    @plugin_run_then
+    @cmdy_plugin_run_then
     def float(self, which=None): # pylint: disable=redefined-builtin
         """Cast value to float"""
         return float(self.str(which))
 
-    @plugin_run_then
+    @cmdy_plugin_run_then
     async def afloat(self, which=None):
         """Async version of float"""
         return float(await self.astr(which))

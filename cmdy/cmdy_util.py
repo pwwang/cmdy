@@ -4,9 +4,11 @@ that don't need to be baked here instead of the main module
 """
 import warnings
 import inspect
+from functools import wraps
 from os import devnull, environ
 from subprocess import Popen
 from diot import Diot
+import executing
 import curio
 
 STDIN = -7
@@ -143,6 +145,29 @@ class _CmdySyncStreamFromAsync:
     def dump(self):
         """Dump all records as a string or bytes"""
         return ('' if self.encoding else b'').join(self)
+
+def _cmdy_property_called_as_method(caller=1):
+    """Tell if a property is called by a method way"""
+    frame = inspect.stack()[caller+1].frame
+    source = executing.Source.executing(frame)
+    node = source.node
+    try:
+
+        return node.parent.func is node
+    except AttributeError:
+        return False
+
+def _cmdy_property_or_method(func):
+    """Make a class property also available to be called as a method"""
+    @wraps(func)
+    def wrapper(self):
+        if _cmdy_property_called_as_method():
+            @wraps(func)
+            def func_wrapper(*args, **kwargs):
+                return func(self, *args, **kwargs)
+            return func_wrapper
+        return func(self)
+    return wrapper
 
 def _cmdy_compose_arg_segment(cmd_args: dict,
                               config: Diot) -> list:

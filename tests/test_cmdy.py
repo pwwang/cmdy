@@ -95,9 +95,17 @@ def test_fg_wait(capsys):
     assert capsys.readouterr().out == '123\n'
 
 def test_redirect(tmp_path):
-
     tmpfile = tmp_path / 'test_redirect.txt'
     c = cmdy.echo(n='1234').r() > tmpfile
+    assert tmpfile.read_text() == '1234'
+    assert c.holding.stdout.closed
+    assert c.stdout is None
+    assert c.stderr == ''
+
+
+def test_redirect_prop(tmp_path):
+    tmpfile = tmp_path / 'test_redirect_prop.txt'
+    c = cmdy.echo(n='1234').r > tmpfile
     assert tmpfile.read_text() == '1234'
     assert c.holding.stdout.closed
     assert c.stdout is None
@@ -597,8 +605,10 @@ def test_mixed_actions_async_then():
     a = cmdy.echo('1 1>&2', cmdy_shell=True).a().r(STDERR) > STDOUT
     assert isinstance(a, CmdyAsyncResult)
 
+def test_mixed_actions_async_then_run():
     c = cmdy.echo('1 1>&2', cmdy_shell=True).h()
-    assert isinstance(c.a().run(), CmdyAsyncResult)
+    r = c.a().run()
+    assert isinstance(r, CmdyAsyncResult)
 
     a = cmdy.echo().a().fg()
     assert isinstance(a, CmdyAsyncResult)
@@ -684,6 +694,9 @@ def test_mixed_actions_fg_then():
     # fg is final, cannot do anything else
     with pytest.raises(CmdyActionError):
         cmdy.echo().h().fg().r()
+
+    with pytest.raises(CmdyActionError):
+        cmdy.echo().h.fg.r
 
 def test_mixed_actions_iter_then():
 

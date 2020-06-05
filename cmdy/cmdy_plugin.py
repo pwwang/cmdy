@@ -1,7 +1,7 @@
 """Plugins for cmdy"""
-from functools import wraps
+from functools import wraps, partial
 from varname import will
-from .cmdy_util import CmdyActionError
+from .cmdy_util import CmdyActionError, _cmdy_property_or_method
 
 def _cmdy_hook_class(cls):
     """Put hooks into the original class for extending"""
@@ -11,6 +11,7 @@ def _cmdy_hook_class(cls):
     cls._plugin_stacks = {}
 
     def _original(self, fname):
+        """Get the original function of self, if it is overridden"""
         # callframe is oringally -1
         frame = self._plugin_callframe.setdefault(fname, -1)
         frame += 1
@@ -25,9 +26,9 @@ def _cmdy_hook_class(cls):
 
     cls.__init__ = __init__
 
-    # Not doing isinstance checking for module baking purposes
-    if cls.__name__ == 'CmdyHolding':
+    if cls.__name__ == "CmdyHolding":
         orig_reset = cls.reset
+        @wraps(orig_reset)
         def reset(self, *args, **kwargs):
             # clear the callframes as well
             self._plugin_callframe = {}
@@ -35,26 +36,41 @@ def _cmdy_hook_class(cls):
             return self
 
         cls.reset = reset
-    # this is not a decorator, we don't return cls
+    # self is not a decorator, we don't return cls
 
-def cmdy_plugin(cls):
-    """A decorator to define a cmdy_plugin
-    A cmdy_plugin should be a class and methods should be decorated by the hooks
+def _cmdy_plugin_funcname(func):
+    """Get the function name defined in a plugin
+    We will ignore the underscores on the right except for those
+    magic method, so that we can have the same function defined for
+    different classes
+    """
+    funcname = func.__name__.rstrip('_')
+    if funcname.startswith('__'):
+        return funcname + '__'
+    return funcname
+
+def _raw_plugin(cls):
+    """A decorator to define a cmdy plugin
+    A cmdy_plugin should be a class and methods
+    should be decorated by the hooks
     """
     orig_init = cls.__init__
     data = [val for val in cls.__dict__.values() if hasattr(val, 'enable')]
 
+    @wraps(orig_init)
     def __init__(self):
         self.enabled = False
         self.enable()
         orig_init(self)
 
     def enable(self):
+        """Enable all the functions properties defined in the plugin"""
         for val in data:
             val.enable()
         self.enabled = True
 
     def disable(self):
+        """Disable all the functions properties defined in the plugin"""
         for val in data:
             val.disable()
         self.enabled = False
@@ -64,29 +80,30 @@ def cmdy_plugin(cls):
     cls.__init__ = __init__
     return cls
 
+
 def _plugin_then(cls, func, aliases,
+                 *, final: bool = False, prop: bool = True,
+                 hold_right: bool = False,
                  # we have to pass this for module baking purposes
-                 holding_finals: list, result_finals: list,
-                 holding_left: list, holding_right: list,
-                 *, final: bool = False, hold_right: bool = False
+                 proxy: "_CmdyPluginProxy" = None,
                  ) -> "Callable":
     aliases = aliases or []
     if not isinstance(aliases, list):
         aliases = [alias.strip() for alias in aliases.split(',')]
     aliases.insert(0, _cmdy_plugin_funcname(func))
 
-    finals = (holding_finals
-              if cls.__name__ == 'CmdyHolding'
-              else result_finals)
+    finals = (proxy.holding_finals
+              if cls is proxy.holding_class
+              else proxy.result_finals)
     if final:
         finals.extend(aliases)
 
     @wraps(func)
     def wrapper(self, *args, **kwargs):
         # Update actions
-        self.did, self.curr, self.will = self.curr, self.will, will()
+        self.did, self.curr, self.will = self.curr, self.will, will(2)
 
-        if self.curr in finals and self.will in holding_left:
+        if self.curr in finals and self.will in proxy.holding_left:
             raise CmdyActionError("Action taken after a final action.")
         # Initialize data
         # Make it True to tell future actions that I have been called
@@ -94,20 +111,47 @@ def _plugin_then(cls, func, aliases,
         self.data.setdefault(_cmdy_plugin_funcname(func), {})
         return func(self, *args, **kwargs)
 
-    wrapper.enable = lambda: _cmdy_method_enable(cls, aliases, wrapper)
-    wrapper.disable = lambda: _cmdy_method_disable(cls, aliases, wrapper)
+    if prop:
+        wrapper.enable = lambda: _cmdy_property_enable(
+            cls, aliases, _cmdy_property_or_method(wrapper)
+        )
+        wrapper.disable = lambda: _cmdy_property_disable(
+            cls, aliases, _cmdy_property_or_method(wrapper)
+        )
+    else:
+        wrapper.enable = lambda: _cmdy_method_enable(cls, aliases, wrapper)
+        wrapper.disable = lambda: _cmdy_method_disable(cls, aliases, wrapper)
 
-    if cls.__name__ == 'CmdyHolding':
-        holding_left.extend(aliases)
+    if cls is proxy.holding_class:
+        proxy.holding_left.extend(aliases)
         if hold_right:
-            holding_right.extend(aliases)
+            proxy.holding_right.extend(aliases)
+
     return wrapper
 
-def _cmdy_plugin_funcname(func):
-    funcname = func.__name__.rstrip('_')
-    if funcname.startswith('__'):
-        return funcname + '__'
-    return funcname
+def _raw_add_method(cls):
+    """A decorator to add a method to a class"""
+    def decorator(func):
+        func.enable = lambda: _cmdy_method_enable(
+            cls, [_cmdy_plugin_funcname(func)], func
+        )
+        func.disable = lambda: _cmdy_method_disable(
+            cls, [_cmdy_plugin_funcname(func)], func
+        )
+        return func
+    return decorator
+
+def _raw_add_property(cls):
+    """A decorator to add a property to a class"""
+    def decorator(func):
+        func.enable = lambda: _cmdy_property_enable(
+            cls, [_cmdy_plugin_funcname(func)], func
+        )
+        func.disable = lambda: _cmdy_property_disable(
+            cls, [_cmdy_plugin_funcname(func)], func
+        )
+        return func
+    return decorator
 
 def _cmdy_method_enable(cls, names, func):
     for name in names:
@@ -153,26 +197,110 @@ def _cmdy_property_disable(cls, names, func):
         if not hasattr(cls, name) and cls._plugin_stacks[name]:
             setattr(cls, name, cls._plugin_stacks[name].pop(0))
 
-def plugin_add_method(cls):
-    """A decorator to add a method to a class"""
-    def decorator(func):
-        func.enable = lambda: _cmdy_method_enable(
-            cls, [_cmdy_plugin_funcname(func)], func
-        )
-        func.disable = lambda: _cmdy_method_disable(
-            cls, [_cmdy_plugin_funcname(func)], func
-        )
-        return func
-    return decorator
 
-def plugin_add_property(cls):
-    """A decorator to add a property to a class"""
-    def decorator(func):
-        func.enable = lambda: _cmdy_property_enable(
-            cls, [_cmdy_plugin_funcname(func)], func
-        )
-        func.disable = lambda: _cmdy_property_disable(
-            cls, [_cmdy_plugin_funcname(func)], func
-        )
-        return func
-    return decorator
+# We can't import the classes here
+# If we put them in submodules, plugins will have
+# no effects on baked modules
+def _raw_hold_then(alias_or_func=None,
+                   *, final: bool = False, prop=True,
+                   hold_right: bool = True,
+                   proxy: "_CmdyPluginProxy" = None):
+    """What to do if a command is holding
+
+    Args:
+        alias_or_func (str|list|Callable): Direct decorator or with kwargs
+        final (bool): If this is a final action
+        prop (bool): Enable the property call for the method
+            Only works for CmdyHolding
+        hold_right (bool): Tell previous actions that I should be on hold.
+                        But make sure running will be taken good care of.
+    """
+    aliases = None if callable(alias_or_func) else alias_or_func
+    func = alias_or_func if callable(alias_or_func) else None
+
+    if func:
+        return _plugin_then(proxy.holding_class, func, aliases,
+                            final=final, prop=prop, hold_right=hold_right,
+                            proxy=proxy)
+
+    return lambda func: _plugin_then(
+        proxy.holding_class, func, aliases,
+        final=final, prop=prop, hold_right=hold_right,
+        proxy=proxy
+    )
+
+def _raw_run_then(alias_or_func=None, *, final: bool = False,
+                  proxy: "_CmdyPluginProxy" = None):
+    """What to do when a command is running"""
+    aliases = None if callable(alias_or_func) else alias_or_func
+    func = alias_or_func if callable(alias_or_func) else None
+
+    if func:
+        return _plugin_then(proxy.result_class, func, aliases,
+                            final=final, prop=False, proxy=proxy)
+
+    return lambda func: _plugin_then(
+        proxy.result_class, func, aliases,
+        final=final, prop=False, proxy=proxy
+    )
+
+def _raw_async_run_then(alias_or_func=None, *, final: bool = False,
+                        proxy: "_CmdyPluginProxy" = None):
+    """What to do when a command is running asyncronously"""
+    aliases = None if callable(alias_or_func) else alias_or_func
+    func = alias_or_func if callable(alias_or_func) else None
+
+    if func:
+        return _plugin_then(proxy.async_result_class, func, aliases,
+                            final=final, prop=False, proxy=proxy)
+
+    return lambda func: _plugin_then(
+        proxy.async_result_class, func, aliases,
+        final=final, prop=False, proxy=proxy
+    )
+
+class _CmdyPluginProxy:
+    """Wrap all stuff that are needed by main module.
+    We can't define them directly, because of module baking
+    We need to pass in the unique values/variables that used in
+    original and baked module. So that this submodule can be reused.
+    """
+    def __init__(self,
+                 holding_class,
+                 result_class,
+                 async_result_class,
+                 holding_left,
+                 holding_right,
+                 holding_finals,
+                 result_finals):
+        self.holding_class = holding_class
+        self.result_class = result_class
+        self.async_result_class = async_result_class
+        self.holding_left = holding_left
+        self.holding_right = holding_right
+        self.holding_finals = holding_finals
+        self.result_finals = result_finals
+
+    def hook_plugin(self):
+        """Get the plugin class hook"""
+        return _raw_plugin
+
+    def hook_add_method(self):
+        """Get the add method hook"""
+        return _raw_add_method
+
+    def hook_add_property(self):
+        """Get the add property hook"""
+        return _raw_add_property
+
+    def hook_hold_then(self):
+        """Get the hold then hook"""
+        return partial(_raw_hold_then, proxy=self)
+
+    def hook_run_then(self):
+        """Get the run then hook"""
+        return partial(_raw_run_then, proxy=self)
+
+    def hook_async_run_then(self):
+        """Get the async run then hook"""
+        return partial(_raw_async_run_then, proxy=self)
