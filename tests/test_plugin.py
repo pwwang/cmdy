@@ -5,6 +5,7 @@ from diot import Diot
 from cmdy import (cmdy_plugin, plugin_add_method, plugin_add_property,
                   CmdyHolding, CmdyActionError, _cmdy_hook_class,
                   CmdyAsyncResult, _cmdy_parse_args, STDERR,
+                  CMDY_CONFIG, _CMDY_BAKED_ARGS,
                   plugin_hold_then, plugin_run_then, plugin_run_then_async)
 import curio
 
@@ -260,7 +261,9 @@ def test_hold_then():
     assert callable(Plugin.test.enable)
     p = Plugin()
     assert callable(CmdyHolding.test)
-    h = CmdyHolding(*_cmdy_parse_args('echo', ['echo', '123'], {}), will='test').test()
+    h = CmdyHolding(*_cmdy_parse_args('echo', ['echo', '123'], {},
+                                      CMDY_CONFIG, _CMDY_BAKED_ARGS),
+                                      will='test').test()
     assert h.stdin == 123
 
 def test_run_then():

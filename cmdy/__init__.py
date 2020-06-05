@@ -1,5 +1,9 @@
 """A handy package to run command from python"""
+# We have to inevitably put stuff in the main module for
+# module baking purposes
+#
 # pylint: disable=too-many-lines
+#
 # ----------------------------------------------------------
 # Naming rules to save the names for the uses of
 # >>> from cmdy import ...
@@ -9,36 +13,47 @@
 # 3. Any functions to be exported will be prefixed with 'cmdy_'
 # 4. 3 also includes plugin hooks
 # ----------------------------------------------------------
+#
 import sys as _sys
 import fileinput as _fileinput
-from os import devnull as _devnull
-from functools import wraps as _wraps
+
 from threading import Event as _Event
 from shlex import quote as _quote
 import warnings as _warnings
 import inspect as _inspect
 from diot import Diot as _Diot
-from modkit import modkit as _modkit
 from simpleconf import Config as _Config
 import curio as _curio
 from curio import subprocess as _subprocess
 from varname import will as _will
+from .cmdy_util import (STDIN, STDOUT, STDERR, DEVNULL,
+                        CmdyBakingError, CmdyActionError, CmdyTimeoutError,
+                        CmdyExecNotFoundError, CmdyReturnCodeError,
+                        _cmdy_raise_return_code_error,
+                        _cmdy_compose_cmd, _cmdy_parse_args,
+                        _CmdySyncStreamFromAsync)
+from .cmdy_plugin import (_cmdy_hook_class, _plugin_then, cmdy_plugin,
+                          plugin_add_method, plugin_add_property)
+# We have to put this in the final position to
+# make modkit detect the submodules
+# pylint: disable=wrong-import-order
+from modkit import modkit as _modkit
 
 # We cannot define the variables that need to be baked
 # in submodules, because we don't want to deepcopy the
 # whole module.
-_CMDY_DEFAULT_CONFIG = _Diot(
-    cmdy_async=False,
-    cmdy_exe=None,
-    cmdy_dupkey=False,
-    cmdy_okcode=0,
-    cmdy_prefix='auto',
-    cmdy_raise=True,
-    cmdy_sep=' ',
-    cmdy_shell=False,
-    cmdy_encoding='utf-8',
-    cmdy_timeout=0
-)
+_CMDY_DEFAULT_CONFIG = _Diot({
+    'async': False,
+    'exe': None,
+    'dupkey': False,
+    'okcode': 0,
+    'prefix': 'auto',
+    'raise': True,
+    'sep': ' ',
+    'shell': False,
+    'encoding': 'utf-8',
+    'timeout': 0
+})
 
 CMDY_CONFIG = _Config()
 CMDY_CONFIG._load(
@@ -50,13 +65,6 @@ CMDY_CONFIG._load(
 
 _CMDY_BAKED_ARGS = _Diot()
 _CMDY_EVENT = _Event()
-
-# These are naming exceptions for convenience
-STDIN = -7
-STDOUT = -2
-STDERR = -8
-# or '/dev/null'?
-DEVNULL = _devnull
 
 # The actions that will put left side on hold
 # For example: cmdy.ls().h()
@@ -70,244 +78,6 @@ _CMDY_HOLDING_RIGHT = []
 _CMDY_HOLDING_FINALS = []
 _CMDY_RESULT_FINALS = []
 
-class CmdyBakingError(Exception):
-    """Baking from non-keyword arguments"""
-
-class CmdyActionError(Exception):
-    """Wrong actions taken"""
-
-class CmdyTimeoutError(Exception):
-    """Timeout running command"""
-
-class CmdyExecNotFoundError(Exception):
-    """Unable to find the executable"""
-
-class CmdyReturnCodeError(Exception):
-    """Unexpected return code"""
-
-    @staticmethod
-    def _out_nowait(result, which):
-        if which == STDOUT and getattr(result, '_stdout_str', None) is not None:
-            return result._stdout_str.splitlines()
-        if which == STDERR and getattr(result, '_stderr_str', None) is not None:
-            return result._stderr_str.splitlines()
-
-        out = result.stdout if which == STDOUT else result.stderr
-        if isinstance(out, (str, bytes)):
-            return out.splitlines()
-
-        return list(out)
-
-    def __init__(self, result):
-        if isinstance(result, (_Diot, CmdyResult)):
-            msgs = [f'Unexpected RETURN CODE {result.rc}, '
-                    f'expecting: {result.holding.okcode}',
-                    '',
-                    f'  [   PID] {result.pid}',
-                    '',
-                    '  [   CMD] '
-                    f'{getattr(result, "piped_strcmds", result.cmd)}',
-                    '']
-
-            if result.stdout is None:
-                msgs.append('  [STDOUT] <NA / ITERATED / REDIRECTED>')
-                msgs.append('')
-            else:
-                outs = CmdyReturnCodeError._out_nowait(result, STDOUT) or ['']
-                msgs.append(f'  [STDOUT] {outs.pop().rstrip()}')
-                msgs.extend(f'           {out}' for out in outs[:31])
-                if len(outs) > 31:
-                    msgs.append(f'           [{len(outs)-31} lines hidden.]')
-                msgs.append('')
-
-            if result.stderr is None:
-                msgs.append('  [STDERR] <NA / ITERATED / REDIRECTED>')
-                msgs.append('')
-            else:
-                errs = CmdyReturnCodeError._out_nowait(result, STDERR) or ['']
-                msgs.append(f'  [STDERR] {errs.pop().rstrip()}')
-                msgs.extend(f'           {err}' for err in errs[:31])
-                if len(errs) > 31:
-                    msgs.append(f'           [{len(errs)-31} lines hidden.]')
-                msgs.append('')
-        else: # pragma: no cover
-            msgs = [str(result)]
-        super().__init__('\n'.join(msgs))
-
-async def _cmdy_raise_return_code_error(aresult):
-    """Raise CmdyReturnCodeError from CmdyAsyncResult
-    Compose a fake CmdyResult for CmdyReturnCodeError
-    """
-    # this should be
-    result = _Diot(rc=aresult._rc,
-                   pid=aresult.pid,
-                   cmd=aresult.cmd,
-                   piped_strcmds=getattr(aresult, 'piped_strcmds', None),
-                   holding=_Diot(okcode=aresult.holding.okcode),
-                   _stdout_str=(await aresult.stdout.read()
-                                if aresult.stdout else ''),
-                   _stderr_str=(await aresult.stderr.read()
-                                if aresult.stderr else ''),
-                   stdout=aresult.stdout,
-                   stderr=aresult.stderr)
-
-    raise CmdyReturnCodeError(result)
-
-# not for external use
-class _CmdySyncStreamFromAsync:
-    """Take an async iterable into a sync iterable
-    We use _curio.run to fetch next record each time
-    A StopIteration raised when a StopAsyncIteration raises
-    for the async iterable
-    """
-    def __init__(self, astream: _curio.io.FileStream,
-                 encoding: str = None):
-        self.astream = astream
-        self.encoding = encoding
-
-    async def _fetch_next(self, timeout: float = None):
-        await self.astream.flush()
-        if timeout:
-            ret = await _curio.timeout_after(timeout, self.astream.__anext__)
-        else:
-            ret = await self.astream.__anext__()
-        return ret.decode(self.encoding) if self.encoding else ret
-
-    def next(self, timeout: float = None):
-        """Fetch the next record within give timeout
-        If nothing produced after the timeout, returns empty str or bytes
-        """
-        try:
-            return _curio.run(self._fetch_next(timeout))
-        except StopAsyncIteration:
-            raise StopIteration()
-        except _curio.TaskTimeout:
-            return '' if self.encoding else b''
-
-    def __next__(self):
-        return self.next()
-
-    def __iter__(self):
-        return self
-
-    def dump(self):
-        """Dump all records as a string or bytes"""
-        return ('' if self.encoding else b'').join(self)
-
-def _cmdy_parse_args(name: str, args: tuple, kwargs: dict):
-    """Get parse whatever passed to cmdy.ls()
-
-    Example:
-        ```python
-        parse_args("a", "--l=a", {'x': True}, cmdy_pipe=True,
-                   popen_encoding='utf-8')
-        # gives:
-        # ["a", "--l=a"], {"x": True}, {"pipe": True}, {"encoding": 'utf-8'}
-        ```
-
-    Args:
-        args (tuple): The arugments passed to `cmdy.ls(...)`
-        kwargs (dict): The kwargs passed to `cmdy.ls(...)`
-    """
-    ret_args: list = []
-    ret_kwargs: dict = {}
-    ret_cfgargs: _Diot = _Diot()
-    ret_popenargs: _Diot = _Diot()
-
-    base_kwargs = CMDY_CONFIG._use(name, 'default', copy=True)
-    base_kwargs.update(_CMDY_BAKED_ARGS)
-    base_kwargs.update(kwargs)
-
-    for key, val in base_kwargs.items():
-        if key.startswith('popen_'):
-            ret_popenargs[key[6:]] = val
-        elif key.startswith('cmdy_'):
-            ret_cfgargs[key[5:]] = val
-        elif val is not False:
-            ret_kwargs[key] = val
-
-    for arg in args:
-        if isinstance(arg, dict):
-            for key, val in arg.items():
-                if key in ret_kwargs:
-                    _warnings.warn(f"Argument {key} has been specified "
-                                   "in both *args and **kwargs. "
-                                   "The one in *args will be ignored.",
-                                   UserWarning)
-                    continue
-                if val is not False:
-                    ret_kwargs[key] = val
-        else:
-            ret_args.append(str(arg))
-
-    for pipe in ('stdin', 'stdout', 'stderr'):
-        if pipe in ret_popenargs:
-            _warnings.warn("Motifying pipes are not allowed. "
-                           "Values will be ignored")
-            del ret_popenargs[pipe]
-
-    if 'encoding' in ret_popenargs:
-        _warnings.warn("Please use cmdy_encoding instead of popen_encoding.")
-
-    if 'shell' in ret_popenargs:
-        _warnings.warn("To change the shell mode, use cmdy_shell instead.")
-        del ret_popenargs.shell
-
-    if isinstance(ret_cfgargs.okcode, str):
-        ret_cfgargs.okcode = [okc.strip()
-                              for okc in ret_cfgargs.okcode.split(',')]
-    if not isinstance(ret_cfgargs.okcode, list):
-        ret_cfgargs.okcode = [ret_cfgargs.okcode]
-    ret_cfgargs.okcode = [int(okc) for okc in ret_cfgargs.okcode]
-
-    if ret_cfgargs.shell:
-        if ret_cfgargs.shell is True:
-            ret_cfgargs.shell = ['/bin/bash', '-c']
-        if not isinstance(ret_cfgargs.shell, list):
-            ret_cfgargs.shell = [ret_cfgargs.shell, '-c']
-        elif len(ret_cfgargs.shell) == 1:
-            ret_cfgargs.shell.append('-c')
-
-    return ret_args, ret_kwargs, ret_cfgargs, ret_popenargs
-
-def _cmdy_compose_cmd(args: list, kwargs: dict, *,
-                      shell: list, prefix: str,
-                      sep: str, dupkey: bool) -> list:
-    """Compose the command for Popen"""
-    command = args[:]
-
-    precedings = kwargs.pop('', [])
-    command.extend(precedings if isinstance(precedings, list) else [precedings])
-
-    positionals = kwargs.pop('_', [])
-
-    for key, value in kwargs.items():
-        pref = prefix if prefix != 'auto' else '-' if len(key) == 1 else '--'
-        separator = sep if sep != 'auto' else ' ' if len(key) == 1 else '='
-        if not isinstance(value, list):
-            value = [value]
-
-        for i, val in enumerate(value):
-            if separator == ' ':
-                if i == 0 or dupkey:
-                    command.append(f'{pref}{key}')
-                if val is not True:
-                    command.append(str(val))
-            else:
-                if i == 0 or dupkey:
-                    command.append(f'{pref}{key}{separator}{val}')
-                elif val is not True:
-                    command.append(str(val))
-
-    if not isinstance(positionals, (tuple, list)):
-        positionals = [positionals]
-
-    command.extend(str(pos) for pos in positionals)
-
-    if shell:
-        return shell + [' '.join(command)]
-    return command
-
 class Cmdy:
     """Cmdy class
     It's just a bridge for doing cmdy.ls -> cmdy.ls()
@@ -315,7 +85,6 @@ class Cmdy:
 
     def __init__(self, name: str,
                  args: list = None,
-                 kwargs: dict = None,
                  cfgargs: _Diot = None,
                  popenargs: _Diot = None):
         """Initialize Cmdy object
@@ -334,21 +103,17 @@ class Cmdy:
         self._name: str = name # should be not changed later on
         # cmdy.ls("/path/to")
         self._args: list = args or []
-        # cmdy.ls(l="/path/to")
-        self._kwargs: dict = kwargs or {}
         # cmdy.ls(cmdy_prefix="-", l=...)
         self._cfgargs: _Diot = cfgargs
         # cmdy.ls(cmdy_stdin="/dev/stdin")
         self._popenargs: _Diot = popenargs
 
     def __call__(self, *args, **kwargs):
-        _args, _kwargs, _cfgargs, _popenargs = _cmdy_parse_args(
-            self._name, args, kwargs
+        _args, _cfgargs, _popenargs = _cmdy_parse_args(
+            self._name, args, kwargs, CMDY_CONFIG, _CMDY_BAKED_ARGS
         )
 
         ready_args = (self._args or []) + _args
-        ready_kwargs = self._kwargs.copy() if self._kwargs else {}
-        ready_kwargs.update(_kwargs)
         ready_cfgargs = self._cfgargs.copy() if self._cfgargs else _Diot()
         ready_cfgargs.update(_cfgargs)
         ready_popenargs = self._popenargs.copy() if self._popenargs else _Diot()
@@ -361,11 +126,11 @@ class Cmdy:
         if will == 'bake':
             if args:
                 raise CmdyBakingError('Must bake from keyword arguments.')
-            return self.__class__(self._name, ready_args, ready_kwargs,
+            return self.__class__(self._name, ready_args,
                                   ready_cfgargs, ready_popenargs)
 
         # Let CmdyHolding handle the result
-        return CmdyHolding([exe] + ready_args, ready_kwargs,
+        return CmdyHolding([exe] + ready_args,
                            ready_cfgargs, ready_popenargs, will)
 
     def bake(self):
@@ -382,7 +147,6 @@ class CmdyHolding:
     """Command not running yet"""
     def __new__(cls, # pylint: disable=too-many-function-args
                 args: list,
-                kwargs: dict,
                 cfgargs: _Diot,
                 popenargs: _Diot,
                 will: str = None):
@@ -398,7 +162,7 @@ class CmdyHolding:
             # __init__ automatically called
             return holding
 
-        holding.__init__(args, kwargs, cfgargs, popenargs, will)
+        holding.__init__(args, cfgargs, popenargs, will)
         result = holding.run()
 
         if not will:
@@ -406,7 +170,7 @@ class CmdyHolding:
 
         return result
 
-    def __init__(self, args, kwargs, cfgargs, popenargs, will):
+    def __init__(self, args, cfgargs, popenargs, will):
         # Attach the global EVENT here for later access
 
         # remember this for resetting
@@ -436,10 +200,7 @@ class CmdyHolding:
         self.popenargs = popenargs
         # data carried by actions (ie redirect, pipe, etc)
         self.data = _Diot({'async': cfgargs['async'], 'hold': False})
-        self.cmd = _cmdy_compose_cmd(args, kwargs, shell=self.shell,
-                                     prefix=cfgargs.prefix,
-                                     sep=cfgargs.sep,
-                                     dupkey=cfgargs.dupkey)
+        self.cmd = _cmdy_compose_cmd(args, shell=self.shell)
 
     def __repr__(self):
         return f"<CmdyHolding: {self.cmd}>"
@@ -695,178 +456,14 @@ class CmdyAsyncResult(CmdyResult):
     def stderr(self):
         return self.proc.stderr
 
-def _cmdy_hook_class(cls):
-    """Put hooks into the original class for extending"""
-    # store the functions with the same name
-    # that defined by different plugins
-    # Note that current (most recently added) is not in the stack
-    cls._plugin_stacks = {}
-
-    def _original(self, fname):
-        # callframe is oringally -1
-        frame = self._plugin_callframe.setdefault(fname, -1)
-        frame += 1
-        self._plugin_callframe[fname] = frame
-        return cls._plugin_stacks[fname][frame]
-    cls._original = _original
-
-    orig_init = cls.__init__
-    def __init__(self, *args, **kwargs):
-        self._plugin_callframe = {}
-        orig_init(self, *args, **kwargs)
-
-    cls.__init__ = __init__
-
-    if cls is CmdyHolding:
-        orig_reset = cls.reset
-        def reset(self, *args, **kwargs):
-            # clear the callframes as well
-            self._plugin_callframe = {}
-            orig_reset(self, *args, **kwargs)
-            return self
-
-        cls.reset = reset
-
-    # this is not a decorator, we don't return cls
-
 _cmdy_hook_class(CmdyHolding)
 _cmdy_hook_class(CmdyResult)
 # CmdyAsyncResult is a subclass of CmdyResult
 
-def cmdy_plugin(cls):
-    """A decorator to define a cmdy_plugin
-    A cmdy_plugin should be a class and methods should be decorated by the hooks
-    """
-    orig_init = cls.__init__
-    data = [val for val in cls.__dict__.values() if hasattr(val, 'enable')]
-
-    def __init__(self):
-        self.enabled = False
-        self.enable()
-        orig_init(self)
-
-    def enable(self):
-        for val in data:
-            val.enable()
-        self.enabled = True
-
-    def disable(self):
-        for val in data:
-            val.disable()
-        self.enabled = False
-
-    cls.enable = enable
-    cls.disable = disable
-    cls.__init__ = __init__
-    return cls
-
-def _cmdy_plugin_funcname(func):
-    funcname = func.__name__.rstrip('_')
-    if funcname.startswith('__'):
-        return funcname + '__'
-    return funcname
-
-def _cmdy_method_enable(cls, names, func):
-    for name in names:
-        # put original func into stack if any
-        stack = cls._plugin_stacks.setdefault(name, [])
-        orig_func = getattr(cls, name, None)
-
-        if orig_func:
-            stack.insert(0, orig_func)
-        setattr(cls, name, func)
-
-def _cmdy_method_disable(cls, names, func):
-    for name in names:
-        # remove the function from stack
-        # and restore the latest defined one
-        curr_func = getattr(cls, name)
-        if curr_func is func:
-            delattr(cls, name)
-
-        if func in cls._plugin_stacks[name]:
-            cls._plugin_stacks[name].remove(func)
-
-        if not hasattr(cls, name) and cls._plugin_stacks[name]:
-            setattr(cls, name, cls._plugin_stacks[name].pop(0))
-
-def _cmdy_property_enable(cls, names, func):
-    for name in names:
-        stack = cls._plugin_stacks.setdefault(name, [])
-        orig_prop = getattr(cls, name, None)
-        if orig_prop:
-            stack.insert(0, orig_prop)
-        setattr(cls, name, property(func))
-
-def _cmdy_property_disable(cls, names, func):
-    for name in names:
-        curr_prop = getattr(cls, name)
-        if curr_prop.fget is func:
-            delattr(cls, name)
-
-        cls._plugin_stacks[name] = [prop for prop in cls._plugin_stacks[name]
-                                    if prop.fget is not func]
-
-        if not hasattr(cls, name) and cls._plugin_stacks[name]:
-            setattr(cls, name, cls._plugin_stacks[name].pop(0))
-
-def plugin_add_method(cls):
-    """A decorator to add a method to a class"""
-    def decorator(func):
-        func.enable = lambda: _cmdy_method_enable(
-            cls, [_cmdy_plugin_funcname(func)], func
-        )
-        func.disable = lambda: _cmdy_method_disable(
-            cls, [_cmdy_plugin_funcname(func)], func
-        )
-        return func
-    return decorator
-
-def plugin_add_property(cls):
-    """A decorator to add a property to a class"""
-    def decorator(func):
-        func.enable = lambda: _cmdy_property_enable(
-            cls, [_cmdy_plugin_funcname(func)], func
-        )
-        func.disable = lambda: _cmdy_property_disable(
-            cls, [_cmdy_plugin_funcname(func)], func
-        )
-        return func
-    return decorator
-
-def _plugin_then(cls, func, aliases=None, *,
-                 final: bool = False, hold_right: bool = False):
-    aliases = aliases or []
-    if not isinstance(aliases, list):
-        aliases = [alias.strip() for alias in aliases.split(',')]
-    aliases.insert(0, _cmdy_plugin_funcname(func))
-
-    finals = _CMDY_HOLDING_FINALS if cls is CmdyHolding else _CMDY_RESULT_FINALS
-    if final:
-        finals.extend(aliases)
-
-    @_wraps(func)
-    def wrapper(self, *args, **kwargs):
-        # Update actions
-        self.did, self.curr, self.will = self.curr, self.will, _will()
-
-        if self.curr in finals and self.will in _CMDY_HOLDING_LEFT:
-            raise CmdyActionError("Action taken after a final action.")
-        # Initialize data
-        # Make it True to tell future actions that I have been called
-        # Just in case some plugins forget to do this
-        self.data.setdefault(_cmdy_plugin_funcname(func), {})
-        return func(self, *args, **kwargs)
-
-    wrapper.enable = lambda: _cmdy_method_enable(cls, aliases, wrapper)
-    wrapper.disable = lambda: _cmdy_method_disable(cls, aliases, wrapper)
-
-    if cls is CmdyHolding:
-        _CMDY_HOLDING_LEFT.extend(aliases)
-        if hold_right:
-            _CMDY_HOLDING_RIGHT.extend(aliases)
-    return wrapper
-
+# We can't put this in submodules since
+# it requries explictly the classes
+# If we put them in submodules, plugins will have
+# no effects on baked modules
 def plugin_hold_then(alias_or_func=None,
                      *, final: bool = False,
                      hold_right: bool = True):
@@ -883,9 +480,13 @@ def plugin_hold_then(alias_or_func=None,
 
     if func:
         return _plugin_then(CmdyHolding, func, aliases,
+                            _CMDY_HOLDING_FINALS, _CMDY_RESULT_FINALS,
+                            _CMDY_HOLDING_LEFT, _CMDY_HOLDING_RIGHT,
                             final=final, hold_right=hold_right)
 
     return lambda func: _plugin_then(CmdyHolding, func, aliases,
+                                     _CMDY_HOLDING_FINALS, _CMDY_RESULT_FINALS,
+                                     _CMDY_HOLDING_LEFT, _CMDY_HOLDING_RIGHT,
                                      final=final, hold_right=hold_right)
 
 def plugin_run_then(alias_or_func=None, *, final: bool = False):
@@ -894,9 +495,15 @@ def plugin_run_then(alias_or_func=None, *, final: bool = False):
     func = alias_or_func if callable(alias_or_func) else None
 
     if func:
-        return _plugin_then(CmdyResult, func, aliases, final=final)
+        return _plugin_then(CmdyResult, func, aliases,
+                            _CMDY_HOLDING_FINALS, _CMDY_RESULT_FINALS,
+                            _CMDY_HOLDING_LEFT, _CMDY_HOLDING_RIGHT,
+                            final=final)
 
-    return lambda func: _plugin_then(CmdyResult, func, aliases, final=final)
+    return lambda func: _plugin_then(CmdyResult, func, aliases,
+                                     _CMDY_HOLDING_FINALS, _CMDY_RESULT_FINALS,
+                                     _CMDY_HOLDING_LEFT, _CMDY_HOLDING_RIGHT,
+                                     final=final)
 
 def plugin_run_then_async(alias_or_func):
     """What to do when a command is running asyncronously"""
@@ -904,9 +511,13 @@ def plugin_run_then_async(alias_or_func):
     func = alias_or_func if callable(alias_or_func) else None
 
     if func:
-        return _plugin_then(CmdyAsyncResult, func, aliases)
+        return _plugin_then(CmdyAsyncResult, func, aliases,
+                            _CMDY_HOLDING_FINALS, _CMDY_RESULT_FINALS,
+                            _CMDY_HOLDING_LEFT, _CMDY_HOLDING_RIGHT)
 
-    return lambda func: _plugin_then(CmdyAsyncResult, func, aliases)
+    return lambda func: _plugin_then(CmdyAsyncResult, func, aliases,
+                                     _CMDY_HOLDING_FINALS, _CMDY_RESULT_FINALS,
+                                     _CMDY_HOLDING_LEFT, _CMDY_HOLDING_RIGHT)
 
 # pylint: disable=access-member-before-definition
 # pylint: disable=attribute-defined-outside-init
@@ -970,7 +581,6 @@ class CmdyPluginRedirect:
 
         return self
 
-
     @plugin_add_method(CmdyHolding)
     def __gt__(self, file):
         which = self.data.get('redirect', {}).get('which', [STDOUT])
@@ -1025,7 +635,7 @@ class CmdyPluginFg:
     Running command in foreground
     Using sys.stdout and sys.stderr"""
     async def _feed(self: CmdyResult,
-                    poll_interval: float = 0.1):
+                    poll_interval: float):
         """Try to feed stdout/stderr to sys.stdout/sys.stderr"""
 
         async def _feed_one(instream, outstream):
@@ -1053,6 +663,23 @@ class CmdyPluginFg:
 
         if isinstance(self, CmdyAsyncResult):
             await self.wait()
+
+    async def _timeout_wrapper(self: CmdyResult,
+                               poll_interval: float):
+        if self.holding.timeout:
+            try:
+                await _curio.timeout_after(
+                    self.holding.timeout,
+                    CmdyPluginFg._feed,
+                    self,
+                    poll_interval
+                )
+            except _curio.TaskTimeout:
+                raise CmdyTimeoutError(
+                    f"Timeout after {self.holding.timeout} seconds."
+                ) from None
+        else:
+            await CmdyPluginFg._feed(self, poll_interval)
 
     @plugin_hold_then('fg', final=True, hold_right=False)
     def foreground(self, stdin: bool = False,
@@ -1089,7 +716,10 @@ class CmdyPluginFg:
 
         ret = orig_run(self, False)
 
-        _curio.run(CmdyPluginFg._feed(ret, self.data.foreground.poll_interval))
+        # we should handle timeout here, since we are not waiting
+        _curio.run(CmdyPluginFg._timeout_wrapper(
+            ret, self.data.foreground.poll_interval
+        ))
         # we can't in self.wait() in _curio.run, because there is
         # already a _curio kernel running inside CmdyResult.wait()
         return ret if isinstance(ret, CmdyAsyncResult) else ret.wait()
@@ -1456,20 +1086,7 @@ def _modkit_delegate(name):
 @_modkit.call
 def _modkit_call(module, assigned_to, **kwargs):
     # Module is deeply copied
-    # But we need to reference all Exceptions
-    # So that we can do:
-    # ```python
-    # from cmdy import CmdyExecNotFoundError
-    # sh = cmdy()
-    # sh.nonexisting()
-    # # raises CmdyExecNotFoundError
-    # # instead of sh.CmdyExecNotFoundError
     newmod = module.__bake__(assigned_to)
-    newmod.CmdyBakingError = module.CmdyBakingError
-    newmod.CmdyActionError = module.CmdyActionError
-    newmod.CmdyTimeoutError = module.CmdyActionError
-    newmod.CmdyExecNotFoundError = module.CmdyExecNotFoundError
-    newmod.CmdyReturnCodeError = module.CmdyReturnCodeError
 
     newmod._CMDY_BAKED_ARGS.update(module._CMDY_BAKED_ARGS)
     newmod._CMDY_BAKED_ARGS.update(kwargs)

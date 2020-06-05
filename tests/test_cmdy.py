@@ -7,7 +7,7 @@ import pytest
 import cmdy
 from cmdy import (CmdyHolding, _CMDY_EVENT, _cmdy_parse_args, CmdyResult,
                   CmdyBakingError, STDOUT, STDERR, STDIN, DEVNULL,
-                  CMDY_PLUGIN_ITER,
+                  CMDY_PLUGIN_ITER, CMDY_CONFIG, _CMDY_BAKED_ARGS,
                   CmdyActionError, CmdyAsyncResult, CmdyTimeoutError,
                   CmdyReturnCodeError, CmdyExecNotFoundError)
 import curio
@@ -37,7 +37,8 @@ def captured():
 
 def test_holding_new():
 
-    ret = CmdyHolding(*_cmdy_parse_args('echo', ['echo', '123'], {}))
+    ret = CmdyHolding(*_cmdy_parse_args('echo', ['echo', '123'], {},
+                                        CMDY_CONFIG, _CMDY_BAKED_ARGS))
     assert isinstance(ret, CmdyResult)
 
 def test_normal_run():
@@ -69,6 +70,10 @@ def test_fg(capsys):
     assert isinstance(c, CmdyResult)
     assert capsys.readouterr().out == '123\n'
 
+def test_fg_timeout():
+    with pytest.raises(CmdyTimeoutError):
+        cmdy.sleep(30, cmdy_timeout=.1).fg()
+
 def test_fg_hold_right(capsys):
 
     c = cmdy.bash(c='echo 1234 && sleep .1').p() | cmdy.cat().fg()
@@ -85,7 +90,7 @@ def test_fg_noencoding(capsysbinary):
     cmdy.echo(123, cmdy_encoding=None).fg()
     assert capsysbinary.readouterr().out == b'123\n'
 
-def test_fg_timeout(capsys):
+def test_fg_wait(capsys):
     cmdy.bash(c='sleep .2 && echo 123').fg()
     assert capsys.readouterr().out == '123\n'
 

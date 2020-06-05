@@ -2,46 +2,102 @@ import pytest
 import time
 import curio
 from diot import Diot
-from cmdy import (_cmdy_parse_args, _CmdySyncStreamFromAsync,
-                  _cmdy_compose_cmd)
+from cmdy import CMDY_CONFIG, _CMDY_BAKED_ARGS
+from cmdy.cmdy_util import (
+    _cmdy_parse_args, _CmdySyncStreamFromAsync,
+    _cmdy_compose_arg_segment, _cmdy_parse_single_kwarg,
+    _cmdy_compose_cmd, _cmdy_fix_popen_config
+)
+
+@pytest.mark.parametrize('cmd_args,config,expected', [
+    ({'a': 1, 'ab': 2}, {}, ['-a', '1', '--ab', '2']),
+    ({'a': 1, 'ab': 2}, {'prefix': '--'}, ['--a', '1', '--ab', '2']),
+    ({'a': 1, 'ab': 2, 'cd': [3,4]}, {'sep': '='},
+     ['-a=1', '--ab=2', '--cd=3', '4']),
+    ({'a': True, 'ab': 2}, {}, ['-a', '--ab', '2']),
+    ({'a': False, 'ab': 2}, {}, ['--ab', '2']),
+    ({'a': [1, 2]}, {}, ['-a', '1', '2']),
+    ({'a': [1, 2]}, {'dupkey': True}, ['-a', '1', '-a', '2']),
+    ({'_': [3, 4], '': [1, 2]}, {}, ['1', '2', '3', '4']),
+])
+def test_cmdy_compose_arg_segment(cmd_args, config, expected):
+    conf = CMDY_CONFIG.copy()
+    conf.update(config)
+    assert _cmdy_compose_arg_segment(cmd_args, conf) == expected
+
+@pytest.mark.parametrize('''kwargs,is_root,global_config,expected_pure,
+expected_config,expected_popen''', [
+    ({'a': 1, 'boy': 2, 'cmdy_prefix': '--'}, True, {},
+     {'a': 1, 'boy': 2}, {'prefix': '--'}, {}),
+])
+def test_cmdy_parse_single_kwarg(kwargs, is_root, global_config, expected_pure,
+                                 expected_config, expected_popen):
+    gconfig = CMDY_CONFIG.copy()
+    gconfig.update(global_config)
+    ret_pure, ret_config, ret_popen = _cmdy_parse_single_kwarg(
+        kwargs, is_root, gconfig
+    )
+    assert expected_pure == ret_pure
+    for key, val in expected_config.items():
+        assert expected_config[key] == val
+    assert expected_popen == ret_popen
+
+def test_fix_popen_config():
+    config = Diot({'envs': {'x': 1}, 'env': {'x': 2}})
+    with pytest.warns(UserWarning):
+        _cmdy_fix_popen_config(config)
+
+    assert 'envs' not in config
+    assert config['env']['x'] == '2'
+
+    config = Diot({'envs': {'x': True}})
+    _cmdy_fix_popen_config(config)
+    assert 'envs' not in config
+    assert config['env']['x'] == '1'
+    # other envs loaded
+    assert len(config['env']) > 1
+
 
 @pytest.mark.parametrize(
-    'args,kwargs,ret_args,ret_kwargs,ret_cfgargs,ret_popenargs', [
+    'args,kwargs,ret_args,ret_cfgargs,ret_popenargs', [
         (("a", "--l=a", {"x": True}), #args
          {"cmdy_okcode": 1, "cmdy_encoding": "utf-8", "y": False}, #kwargs
-         ["a", "--l=a"], # ret_args
-         {"x": True}, # ret_kwargs
+         ["a", "--l=a", "-x"], # ret_args
          {"okcode": [1], "encoding": "utf-8"}, # ret_cfgargs
          {}), # ret_popenargs
         (("a", "--l=a", {"x": True}), #args
+         {"_okcode": 1, "_encoding": "utf-8", "y": False,
+          "_cwd": "path", "_notaconf": True}, #kwargs
+         ["a", "--l=a", "-x", "--_notaconf"], # ret_args
+         {"okcode": [1], "encoding": "utf-8"}, # ret_cfgargs
+         {"cwd": "path"}), # ret_popenargs
+        (("a", "--l=a", {"x": True}), #args
          {"cmdy_okcode": 1, "cmdy_encoding": "utf-8",
           "y": False, "popen_close_fds": True}, #kwargs
-         ["a", "--l=a"], # ret_args
-         {"x": True}, # ret_kwargs
+         ["a", "--l=a", "-x"], # ret_args
          {"okcode": [1], "encoding": "utf-8"}, # ret_cfgargs
          {"close_fds": True}), # ret_popenargs
         (("a", "--l=a", {"x": True}), #args
-         {"cmdy_okcode": 1, "cmdy_encoding": "utf-8", "cmdy_shell": "/bin/sh",
+         {"cmdy_okcode": '0,1', "cmdy_encoding": "utf-8", "cmdy_shell": "/bin/sh",
           "y": False, "popen_close_fds": True}, #kwargs
-         ["a", "--l=a"], # ret_args
-         {"x": True}, # ret_kwargs
-         {"okcode": [1], "encoding": "utf-8", "shell": ["/bin/sh", "-c"]}, # ret_cfgargs
+         ["a", "--l=a", "-x"], # ret_args
+         {"okcode": [0,1], "encoding": "utf-8", "shell": ["/bin/sh", "-c"]}, # ret_cfgargs
          {"close_fds": True}), # ret_popenargs
-        (("a", "--l=a", {"x": True}), #args
+        (("a", "--l=a", {"x": False}), #args
          {"cmdy_okcode": 1, "cmdy_encoding": "utf-8", "cmdy_shell": ["/bin/sh"],
           "y": False, "popen_close_fds": True}, #kwargs
          ["a", "--l=a"], # ret_args
-         {"x": True}, # ret_kwargs
          {"okcode": [1], "encoding": "utf-8", "shell": ["/bin/sh", "-c"]}, # ret_cfgargs
          {"close_fds": True}), # ret_popenargs
     ]
 )
-def test_parse_args(args, kwargs, ret_args, ret_kwargs,
+def test_parse_args(args, kwargs, ret_args,
                     ret_cfgargs, ret_popenargs):
 
-    x_args, x_kwargs, x_cfgargs, x_popenargs = _cmdy_parse_args('', args, kwargs)
+    x_args, x_cfgargs, x_popenargs = _cmdy_parse_args(
+        '', args, kwargs, CMDY_CONFIG, _CMDY_BAKED_ARGS
+    )
     assert x_args == ret_args
-    assert x_kwargs == ret_kwargs
     for key, val in ret_cfgargs.items():
         assert x_cfgargs[key] == val
     assert x_popenargs == ret_popenargs
@@ -51,17 +107,25 @@ def test_parse_args(args, kwargs, ret_args, ret_kwargs,
 def test_parse_args_warnings():
 
     with pytest.warns(UserWarning):
-        args, kwargs, _, _ = _cmdy_parse_args('', args=[{"x":1}],
-                                                  kwargs={'x': 2})
-    assert args == []
-    assert kwargs == {'x': 2}
+        args, _, _ = _cmdy_parse_args('', [{"x":1}],
+                                           {'x': 2},
+                                           CMDY_CONFIG, _CMDY_BAKED_ARGS)
+    assert args == ['-x', '2']
 
     with pytest.warns(UserWarning):
-        _cmdy_parse_args('', args=[], kwargs={'popen_stdin': 2})
+        _cmdy_parse_args('', [], {'popen_stdin': 2},
+                         CMDY_CONFIG, _CMDY_BAKED_ARGS)
     with pytest.warns(UserWarning):
-        _cmdy_parse_args('', args=[], kwargs={'popen_encoding': None})
+        _cmdy_parse_args('', [], {'popen_encoding': None},
+                         CMDY_CONFIG, _CMDY_BAKED_ARGS)
     with pytest.warns(UserWarning):
-        _cmdy_parse_args('', args=[], kwargs={'popen_shell': True})
+        _cmdy_parse_args('', [], {'popen_shell': True},
+                         CMDY_CONFIG, _CMDY_BAKED_ARGS)
+
+def test_parse_args_exception():
+    with pytest.raises(ValueError):
+        _cmdy_parse_args('', [{'popen_cwd': ''}], {},
+                         CMDY_CONFIG, _CMDY_BAKED_ARGS)
 
 def test_asnyc_to_sync():
 
@@ -112,21 +176,14 @@ def test_asnyc_to_sync():
     assert next(stream) == '4\n'
     assert time.time() - tic > .2
 
-@pytest.mark.parametrize('args,kwargs,shell,prefix,sep,dupkey,expected', [
-    (['ls'], {}, ['bash', '-c'], 'auto', 'auto', False, ['bash', '-c', 'ls']),
-    (['ls'], {}, False, 'auto', 'auto', False, ['ls']),
-    (['bedtools', 'intersect', '-a', 'file'], {'bfile': 'file2'}, False,
-     'auto', 'auto', False,
-     ['bedtools', 'intersect', '-a', 'file', '--bfile=file2']),
-    (['abc', 'def'], {'': 'file2', 'k': [1,2], 'xyz': [3,4], '_': 'end'},
-     False, 'auto', 'auto', False,
-     ['abc', 'def', 'file2', '-k', '1', '2', '--xyz=3', '4', 'end']),
-    (['abc', 'def'], {'': 'file2', 'k': [1,2], 'xyz': [3,4], '_': 'end'},
-     False, 'auto', 'auto', True,
-     ['abc', 'def', 'file2', '-k', '1', '-k', '2',
-      '--xyz=3', '--xyz=4', 'end']),
+@pytest.mark.parametrize('args,shell,expected', [
+    (['ls'], ['bash', '-c'], ['bash', '-c', 'ls']),
+    (['ls'], False, ['ls']),
+    (['bedtools', 'intersect', '-a', 'file'], False,
+     ['bedtools', 'intersect', '-a', 'file']),
+    (['abc', 'def'],
+     False,
+     ['abc', 'def']),
 ])
-def test_compose_cmd(args, kwargs, shell, prefix, sep, dupkey, expected):
-    assert _cmdy_compose_cmd(args, kwargs,
-                             shell=shell, prefix=prefix, sep=sep,
-                             dupkey=dupkey) == expected
+def test_compose_cmd(args, shell, expected):
+    assert _cmdy_compose_cmd(args, shell=shell) == expected
