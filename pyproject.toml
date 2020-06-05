@@ -4,8 +4,8 @@ build-backend = "poetry.masonry.api"
 
 [tool.poetry]
 name = "cmdy"
-version = "0.2.2"
-description = "A handy package to run command from python"
+version = "0.3.0"
+description = "Shell language to run command in python"
 authors = [ "pwwang <pwwang@pwwang.com>",]
 license = "MIT"
 readme = "README.md"
@@ -16,6 +16,9 @@ repository = "https://github.com/pwwang/cmdy"
 python = "^3.6"
 modkit = "*"
 python-simpleconf = "*"
+python-varname = "*"
+curio = "^1.2"
+diot = "*"
 
 [tool.poetry.dev-dependencies]
 pytest = "*"
