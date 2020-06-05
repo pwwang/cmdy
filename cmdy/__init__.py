@@ -144,7 +144,7 @@ class Cmdy:
         exe = ready_cfgargs.pop('exe', None) or self._name
 
         # Let CmdyHolding handle the result
-        return CmdyHolding([exe] + ready_args, ready_kwargs,
+        return CmdyHolding([str(exe)] + ready_args, ready_kwargs,
                            ready_cfgargs, ready_popenargs, _will())
 
     def _bake(self, **kwargs):
