@@ -45,6 +45,8 @@ def test_cmdy_property_or_method():
     ({'a': False, 'ab': 2}, {}, ['--ab', '2']),
     ({'a': [1, 2]}, {}, ['-a', '1', '2']),
     ({'a': [1, 2]}, {'dupkey': True}, ['-a', '1', '-a', '2']),
+    ({'a_b': [1, 2]}, {'dupkey': True}, ['--a-b', '1', '--a-b', '2']),
+    ({'a_b': [1, 2]}, {'dupkey': True, 'deform': False}, ['--a_b', '1', '--a_b', '2']),
     ({'_': [3, 4], '': [1, 2]}, {}, ['1', '2', '3', '4']),
 ])
 def test_cmdy_compose_arg_segment(cmd_args, config, expected):
@@ -95,7 +97,7 @@ def test_fix_popen_config():
         (("a", "--l=a", {"x": True}), #args
          {"_okcode": 1, "_encoding": "utf-8", "y": False,
           "_cwd": "path", "_notaconf": True}, #kwargs
-         ["a", "--l=a", "-x", "--_notaconf"], # ret_args
+         ["a", "--l=a", "-x", "---notaconf"], # ret_args
          {"okcode": [1], "encoding": "utf-8"}, # ret_cfgargs
          {"cwd": "path"}), # ret_popenargs
         (("a", "--l=a", {"x": True}), #args

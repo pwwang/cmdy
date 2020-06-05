@@ -214,6 +214,8 @@ def _cmdy_compose_arg_segment(cmd_args: dict,
                    else [positionals])
 
     for key, value in cmd_args.items():
+        if callable(config.deform):
+            key = config.deform(key)
         prefix = (config.prefix
                   if config.prefix != 'auto'
                   else '-'

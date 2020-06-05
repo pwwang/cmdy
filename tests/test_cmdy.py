@@ -747,4 +747,9 @@ def test_mixed_actions_pipe_then_iter(capsys):
     assert isinstance(c, CmdyHolding)
     assert d == '2\n'
 
+def test_subcommand():
+    c = cmdy.a(_sub=True, a=1).b(ab=2).h()
+    assert c.strcmd == 'a -a 1 b --ab 2'
 
+    c = cmdy.a(_sub=True, a=1).b(ab=2, _prefix='-', _sub=True).h().h
+    assert c.strcmd == 'a -a 1 b -ab 2 h'

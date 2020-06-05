@@ -44,14 +44,16 @@ from modkit import modkit as _modkit
 # whole module.
 _CMDY_DEFAULT_CONFIG = _Diot({
     'async': False,
-    'exe': None,
+    'deform': lambda name: name.replace('_', '-'),
     'dupkey': False,
+    'exe': None,
+    'encoding': 'utf-8',
     'okcode': 0,
     'prefix': 'auto',
     'raise': True,
     'sep': ' ',
     'shell': False,
-    'encoding': 'utf-8',
+    'sub': False,
     'timeout': 0
 })
 
@@ -118,6 +120,12 @@ class Cmdy:
         ready_cfgargs.update(_cfgargs)
         ready_popenargs = self._popenargs.copy() if self._popenargs else _Diot()
         ready_popenargs.update(_popenargs)
+
+
+        if ready_cfgargs.pop('sub', False):
+            return CmdyHoldingWithSub(
+                self._name, ready_args, ready_cfgargs, ready_popenargs
+            )
 
         # update the executable
         exe = ready_cfgargs.pop('exe', None) or self._name
@@ -293,6 +301,20 @@ class CmdyHolding:
                 return ret.wait()
             return ret
         return CmdyAsyncResult(self._run(), self)
+
+class CmdyHoldingWithSub:
+    """A command with subcommands"""
+    def __init__(self, name, args, cfgargs, popenargs):
+        self._name = name
+        self._args = args
+        self._cfgargs = cfgargs
+        self._popenargs = popenargs
+
+    def __getattr__(self, name):
+        return Cmdy(self._name,
+                    self._args + [name],
+                    self._cfgargs,
+                    self._popenargs)
 
 class CmdyResult:
 
