@@ -55,13 +55,26 @@ def test_normal_run():
 
 def test_bake():
 
-    echo = cmdy.echo(n=True).bake()
+    echo = cmdy.echo.bake(n=True)
     ret = echo(_='1')
     assert ret.cmd == ['echo', '-n', '1']
     assert ret == '1'
 
-    with pytest.raises(CmdyBakingError):
-        cmdy.echo('1').bake()
+    with pytest.raises(TypeError):
+        cmdy.echo.bake('1')
+
+def test_bake_error():
+
+    with pytest.raises(CmdyActionError):
+        cmdy.echo.bake(n=True).bake()
+
+def test_bake_revert():
+
+    echo = cmdy.echo.bake(n=True)
+    # c = echo().h
+    # assert c.strcmd == 'echo -n'
+    c = echo(n=False).h
+    assert c.strcmd == 'echo'
 
 def test_fg(capsys):
     # use a file obj to replace sys.stdout
@@ -258,6 +271,13 @@ def test_module_baking():
     with pytest.raises(CmdyExecNotFoundError):
         sh2.nonexisting()
 
+def test_module_baking_reimport():
+    from cmdy import Cmdy
+    sh = cmdy(n=True)
+    from cmdy import echo, Cmdy
+
+    c = echo(123, _sub=True).abc().h
+    assert c.strcmd == 'echo 123 abc'
 
 def test_subcommand():
     assert cmdy.echo.a() == 'a\n'
@@ -677,7 +697,7 @@ def test_mixed_actions_redir_then():
 
 def test_mixed_actions_redir_then_fg():
     with pytest.warns(UserWarning) as w:
-        c = cmdy.echo(123).r().fg() > DEVNULL
+        c = cmdy.echo(123).r.fg > DEVNULL
     assert isinstance(c, CmdyResult)
     assert c.stdout == ''
     assert str(w.pop().message) == 'Previous redirected pipe will be ignored.'
@@ -751,5 +771,16 @@ def test_subcommand():
     c = cmdy.a(_sub=True, a=1).b(ab=2).h()
     assert c.strcmd == 'a -a 1 b --ab 2'
 
+    c = cmdy.git(git_dir='.', _sub=True).branch(v=True).h
+    assert c.strcmd == 'git --git-dir . branch -v'
+
+def test_subcommand_subcommand():
     c = cmdy.a(_sub=True, a=1).b(ab=2, _prefix='-', _sub=True).h().h
     assert c.strcmd == 'a -a 1 b -ab 2 h'
+
+
+def test_subcommand_from_import():
+    from cmdy import git, ls
+    ll = ls.bake(l=True)
+    c = git(git_dir='.', _sub=True).branch(v=True).h
+    assert c.strcmd == 'git --git-dir . branch -v'

@@ -88,47 +88,53 @@ def test_fix_popen_config():
 
 
 @pytest.mark.parametrize(
-    'args,kwargs,ret_args,ret_cfgargs,ret_popenargs', [
+    'args,kwargs,ret_args,ret_kwargs,ret_cfgargs,ret_popenargs', [
         (("a", "--l=a", {"x": True}), #args
          {"cmdy_okcode": 1, "cmdy_encoding": "utf-8", "y": False}, #kwargs
          ["a", "--l=a", "-x"], # ret_args
+         {"y": False}, # ret_kwargs
          {"okcode": [1], "encoding": "utf-8"}, # ret_cfgargs
          {}), # ret_popenargs
         (("a", "--l=a", {"x": True}), #args
          {"_okcode": 1, "_encoding": "utf-8", "y": False,
           "_cwd": "path", "_notaconf": True}, #kwargs
-         ["a", "--l=a", "-x", "---notaconf"], # ret_args
+         ["a", "--l=a", "-x"], # ret_args
+         {"_notaconf": True, "y": False}, # ret_kwargs
          {"okcode": [1], "encoding": "utf-8"}, # ret_cfgargs
          {"cwd": "path"}), # ret_popenargs
         (("a", "--l=a", {"x": True}), #args
          {"cmdy_okcode": 1, "cmdy_encoding": "utf-8",
           "y": False, "popen_close_fds": True}, #kwargs
          ["a", "--l=a", "-x"], # ret_args
+         {"y": False}, # ret_kwargs
          {"okcode": [1], "encoding": "utf-8"}, # ret_cfgargs
          {"close_fds": True}), # ret_popenargs
         (("a", "--l=a", {"x": True}), #args
          {"cmdy_okcode": '0,1', "cmdy_encoding": "utf-8", "cmdy_shell": "/bin/sh",
           "y": False, "popen_close_fds": True}, #kwargs
          ["a", "--l=a", "-x"], # ret_args
+         {"y": False}, # ret_kwargs
          {"okcode": [0,1], "encoding": "utf-8", "shell": ["/bin/sh", "-c"]}, # ret_cfgargs
          {"close_fds": True}), # ret_popenargs
         (("a", "--l=a", {"x": False}), #args
          {"cmdy_okcode": 1, "cmdy_encoding": "utf-8", "cmdy_shell": ["/bin/sh"],
           "y": False, "popen_close_fds": True}, #kwargs
          ["a", "--l=a"], # ret_args
+         {"y": False}, # ret_kwargs
          {"okcode": [1], "encoding": "utf-8", "shell": ["/bin/sh", "-c"]}, # ret_cfgargs
          {"close_fds": True}), # ret_popenargs
     ]
 )
-def test_parse_args(args, kwargs, ret_args,
+def test_parse_args(args, kwargs, ret_args, ret_kwargs,
                     ret_cfgargs, ret_popenargs):
 
-    x_args, x_cfgargs, x_popenargs = _cmdy_parse_args(
+    x_args, x_kwargs, x_cfgargs, x_popenargs = _cmdy_parse_args(
         '', args, kwargs, CMDY_CONFIG, _CMDY_BAKED_ARGS
     )
     assert x_args == ret_args
     for key, val in ret_cfgargs.items():
         assert x_cfgargs[key] == val
+    assert x_kwargs == ret_kwargs
     assert x_popenargs == ret_popenargs
     assert isinstance(x_popenargs, Diot)
     assert isinstance(x_cfgargs, Diot)
@@ -136,10 +142,10 @@ def test_parse_args(args, kwargs, ret_args,
 def test_parse_args_warnings():
 
     with pytest.warns(UserWarning):
-        args, _, _ = _cmdy_parse_args('', [{"x":1}],
+        _, kwargs, _, _ = _cmdy_parse_args('', [{"x":1}],
                                            {'x': 2},
                                            CMDY_CONFIG, _CMDY_BAKED_ARGS)
-    assert args == ['-x', '2']
+    assert kwargs == {'x': 2}
 
     with pytest.warns(UserWarning):
         _cmdy_parse_args('', [], {'popen_stdin': 2},
@@ -205,14 +211,16 @@ def test_asnyc_to_sync():
     assert next(stream) == '4\n'
     assert time.time() - tic > .2
 
-@pytest.mark.parametrize('args,shell,expected', [
-    (['ls'], ['bash', '-c'], ['bash', '-c', 'ls']),
-    (['ls'], False, ['ls']),
-    (['bedtools', 'intersect', '-a', 'file'], False,
-     ['bedtools', 'intersect', '-a', 'file']),
-    (['abc', 'def'],
+@pytest.mark.parametrize('args,kwargs,config,shell,expected', [
+    (['ls'], {"l": True}, {}, ['bash', '-c'], ['bash', '-c', 'ls -l']),
+    (['ls'], {}, {}, False, ['ls']),
+    (['bedtools', 'intersect', '-a', 'file'], {'bfile': 'file'}, {}, {},
+     ['bedtools', 'intersect', '-a', 'file', '--bfile', 'file']),
+    (['abc', 'def'], {'ab': 2}, {},
      False,
-     ['abc', 'def']),
+     ['abc', 'def', '--ab', '2']),
 ])
-def test_compose_cmd(args, shell, expected):
-    assert _cmdy_compose_cmd(args, shell=shell) == expected
+def test_compose_cmd(args, kwargs, shell, config, expected):
+    conf = CMDY_CONFIG.copy()
+    conf.update(config)
+    assert _cmdy_compose_cmd(args, kwargs, conf, shell=shell) == expected

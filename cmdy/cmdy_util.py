@@ -416,7 +416,7 @@ def _cmdy_parse_args(name: str,
                      # here for baking purposes.
                      # If we don't it will always use the original module's
                      cmdy_config: "Config",
-                     baked_args: Diot) -> "Tuple[list, Diot, Diot]":
+                     baked_args: Diot) -> "Tuple[list, dict, Diot, Diot]":
     """Get parse whatever passed to `cmdy.command(...)`
 
     Examples:
@@ -439,10 +439,11 @@ def _cmdy_parse_args(name: str,
             The arguments will be passed to `Popen`
     """
     ret_args: list = []
+    ret_kwargs: dict = {}
 
     # without cmdy_ prefix
     global_config = cmdy_config._use(name, 'default', copy=True)
-    baked_cmd_args, baked_config, baked_popen_args = _cmdy_parse_single_kwarg(
+    ret_kwargs, baked_config, baked_popen_args = _cmdy_parse_single_kwarg(
         baked_args, is_root=True, global_config=global_config
     )
 
@@ -453,8 +454,7 @@ def _cmdy_parse_args(name: str,
         global_config=global_config
     )
 
-    baked_cmd_args.update(pure_cmd_kwargs)
-    pure_cmd_kwargs = baked_cmd_args
+    ret_kwargs.update(pure_cmd_kwargs)
 
     baked_popen_args.update(popen_config)
     popen_config = baked_popen_args
@@ -480,21 +480,23 @@ def _cmdy_parse_args(name: str,
         else:
             ret_args.append(str(arg))
 
-    ret_args.extend(_cmdy_compose_arg_segment(
-        pure_cmd_kwargs, global_config
-    ))
+    # ret_args.extend(_cmdy_compose_arg_segment(
+    #     pure_cmd_kwargs, global_config
+    # ))
 
     _cmdy_normalize_config(global_config)
     _cmdy_fix_popen_config(popen_config)
-    return ret_args, global_config, popen_config
+    return ret_args, ret_kwargs, global_config, popen_config
 
-def _cmdy_compose_cmd(args: list, shell: "Union[list, bool]") -> list:
+def _cmdy_compose_cmd(args: list, kwargs: dict, config: Diot,
+                      shell: "Union[list, bool]") -> list:
     """Compose the command for Popen.
     If shell is False, args will be directly returned. Otherwise
     args will be joined and wrapped by the shell
 
     Args:
         args (list): The ready args, including the executable
+        kwargs (dict): The keyword arguments
         shell (str|bool): Whether we should run the whold command,
             or the path of the shell to wrap the command
             If it is True, '/bin/bash' will be used.
@@ -504,7 +506,10 @@ def _cmdy_compose_cmd(args: list, shell: "Union[list, bool]") -> list:
     Returns:
         list: The args if shell if False, otherwise shell wrapped command
     """
-    if not shell:
-        return args
+    command = args[:]
+    command.extend(_cmdy_compose_arg_segment(kwargs, config))
 
-    return shell + [' '.join(args)]
+    if not shell:
+        return command
+
+    return shell + [' '.join(command)]

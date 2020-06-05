@@ -31,6 +31,8 @@ from .cmdy_util import (STDIN, STDOUT, STDERR, DEVNULL,
                         CmdyExecNotFoundError, CmdyReturnCodeError,
                         _cmdy_raise_return_code_error,
                         _cmdy_compose_cmd, _cmdy_parse_args,
+                        _cmdy_compose_arg_segment,
+                        _cmdy_parse_single_kwarg,
                         _cmdy_property_or_method,
                         _CmdySyncStreamFromAsync)
 from .cmdy_plugin import _cmdy_hook_class, _CmdyPluginProxy
@@ -87,6 +89,7 @@ class Cmdy:
 
     def __init__(self, name: str,
                  args: list = None,
+                 kwargs: dict = None,
                  cfgargs: _Diot = None,
                  popenargs: _Diot = None):
         """Initialize Cmdy object
@@ -105,17 +108,21 @@ class Cmdy:
         self._name: str = name # should be not changed later on
         # cmdy.ls("/path/to")
         self._args: list = args or []
+        # cmdy.ls(l=True)
+        self._kwargs: list = kwargs or {}
         # cmdy.ls(cmdy_prefix="-", l=...)
         self._cfgargs: _Diot = cfgargs
         # cmdy.ls(cmdy_stdin="/dev/stdin")
         self._popenargs: _Diot = popenargs
 
     def __call__(self, *args, **kwargs):
-        _args, _cfgargs, _popenargs = _cmdy_parse_args(
+        _args, _kwargs, _cfgargs, _popenargs = _cmdy_parse_args(
             self._name, args, kwargs, CMDY_CONFIG, _CMDY_BAKED_ARGS
         )
 
         ready_args = (self._args or []) + _args
+        ready_kwargs = self._kwargs.copy() if self._kwargs else {}
+        ready_kwargs.update(_kwargs)
         ready_cfgargs = self._cfgargs.copy() if self._cfgargs else _Diot()
         ready_cfgargs.update(_cfgargs)
         ready_popenargs = self._popenargs.copy() if self._popenargs else _Diot()
@@ -124,37 +131,54 @@ class Cmdy:
 
         if ready_cfgargs.pop('sub', False):
             return CmdyHoldingWithSub(
-                self._name, ready_args, ready_cfgargs, ready_popenargs
+                self._name, ready_args, ready_kwargs,
+                ready_cfgargs, ready_popenargs
             )
 
         # update the executable
         exe = ready_cfgargs.pop('exe', None) or self._name
 
-        will = _will()
-        if will == 'bake':
-            if args:
-                raise CmdyBakingError('Must bake from keyword arguments.')
-            return self.__class__(self._name, ready_args,
-                                  ready_cfgargs, ready_popenargs)
-
         # Let CmdyHolding handle the result
-        return CmdyHolding([exe] + ready_args,
-                           ready_cfgargs, ready_popenargs, will)
+        return CmdyHolding([exe] + ready_args, ready_kwargs,
+                           ready_cfgargs, ready_popenargs, _will())
 
-    def bake(self):
-        """Already done in __call__"""
-        return self
+    def _bake(self, **kwargs):
+        """Bake a command"""
+        if _will():
+            raise CmdyActionError("Baking Cmdy object is supposed to "
+                                  "be reused.")
+
+        pure_cmd_kwargs, global_config, popen_config = (
+            _cmdy_parse_single_kwarg(kwargs, True,
+                                     self._cfgargs or CMDY_CONFIG)
+        )
+
+        kwargs = self._kwargs.copy() if self._kwargs else {}
+        kwargs.update(pure_cmd_kwargs)
+
+        config = self._cfgargs.copy() if self._cfgargs else _Diot()
+        config.update(global_config)
+
+        pconfig = self._popenargs.copy() if self._popenargs else _Diot()
+        pconfig.update(popen_config)
+
+        return self.__class__(self._name, self._args,
+                              kwargs, config, pconfig)
+
 
     def __getattr__(self, name):
+        """Direct subcommand"""
+        if name in ('b', 'bake'):
+            return self._bake
+
         self._args.append(name)
         return self
-
-    b = bake
 
 class CmdyHolding:
     """Command not running yet"""
     def __new__(cls, # pylint: disable=too-many-function-args
                 args: list,
+                kwargs: dict,
                 cfgargs: _Diot,
                 popenargs: _Diot,
                 will: str = None):
@@ -170,7 +194,7 @@ class CmdyHolding:
             # __init__ automatically called
             return holding
 
-        holding.__init__(args, cfgargs, popenargs, will)
+        holding.__init__(args, kwargs, cfgargs, popenargs, will)
         result = holding.run()
 
         if not will:
@@ -178,7 +202,7 @@ class CmdyHolding:
 
         return result
 
-    def __init__(self, args, cfgargs, popenargs, will):
+    def __init__(self, args, kwargs, cfgargs, popenargs, will):
         # Attach the global EVENT here for later access
 
         # remember this for resetting
@@ -208,7 +232,8 @@ class CmdyHolding:
         self.popenargs = popenargs
         # data carried by actions (ie redirect, pipe, etc)
         self.data = _Diot({'async': cfgargs['async'], 'hold': False})
-        self.cmd = _cmdy_compose_cmd(args, shell=self.shell)
+        self.cmd = _cmdy_compose_cmd(args, kwargs,
+                                     cfgargs, shell=self.shell)
 
     def __repr__(self):
         return f"<CmdyHolding: {self.cmd}>"
@@ -304,15 +329,18 @@ class CmdyHolding:
 
 class CmdyHoldingWithSub:
     """A command with subcommands"""
-    def __init__(self, name, args, cfgargs, popenargs):
+    def __init__(self, name, args, kwargs, cfgargs, popenargs):
         self._name = name
         self._args = args
+        self._kwargs = kwargs
         self._cfgargs = cfgargs
         self._popenargs = popenargs
 
     def __getattr__(self, name):
+        args = _cmdy_compose_arg_segment(self._kwargs, self._cfgargs)
         return Cmdy(self._name,
-                    self._args + [name],
+                    self._args + args + [name],
+                    {},
                     self._cfgargs,
                     self._popenargs)
 
@@ -1063,8 +1091,8 @@ CMDY_PLUGIN_PIPE = CmdyPluginPipe()
 CMDY_PLUGIN_VALUE = CmdyPluginValue()
 
 @_modkit.delegate
-def _modkit_delegate(name):
-    return Cmdy(name)
+def _modkit_delegate(module, name):
+    return module.Cmdy(name)
 
 @_modkit.call
 def _modkit_call(module, assigned_to, **kwargs):
