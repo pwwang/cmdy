@@ -709,7 +709,7 @@ def test_mixed_actions_redir_then_fg():
         c = cmdy.echo(123).r.fg > DEVNULL
     assert isinstance(c, CmdyResult)
     assert c.stdout == ''
-    assert str(w.pop().message) == 'Previous redirected pipe will be ignored.'
+    assert str(w.pop(UserWarning).message) == 'Previous redirected pipe will be ignored.'
 
 def test_mixed_actions_fg_then():
     # actions could be
