@@ -87,6 +87,7 @@ def _plugin_then(cls, func, aliases,
                  # we have to pass this for module baking purposes
                  proxy: "_CmdyPluginProxy" = None,
                  ) -> "Callable":
+
     aliases = aliases or []
     if not isinstance(aliases, list):
         aliases = [alias.strip() for alias in aliases.split(',')]
@@ -280,6 +281,11 @@ class _CmdyPluginProxy:
         self.holding_right = holding_right
         self.holding_finals = holding_finals
         self.result_finals = result_finals
+        self._classmap = {
+            'CmdyHolding': self.holding_class,
+            'CmdyResult': self.result_class,
+            'CmdyAsyncResult': self.async_result_class
+        }
 
     def hook_plugin(self):
         """Get the plugin class hook"""
@@ -287,11 +293,21 @@ class _CmdyPluginProxy:
 
     def hook_add_method(self):
         """Get the add method hook"""
-        return _raw_add_method
+        def wrapper(cls):
+            if isinstance(cls, str):
+                cls = self._classmap[cls]
+            return _raw_add_method(cls)
+
+        return wrapper
 
     def hook_add_property(self):
         """Get the add property hook"""
-        return _raw_add_property
+        def wrapper(cls):
+            if isinstance(cls, str):
+                cls = self._classmap[cls]
+            return _raw_add_property(cls)
+
+        return wrapper
 
     def hook_hold_then(self):
         """Get the hold then hook"""

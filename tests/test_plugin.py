@@ -5,7 +5,7 @@ from diot import Diot
 from cmdy import (cmdy_plugin, cmdy_plugin_add_method, cmdy_plugin_add_property,
                   CmdyHolding, CmdyActionError, _cmdy_hook_class,
                   CmdyAsyncResult, _cmdy_parse_args, STDERR,
-                  CMDY_CONFIG, _CMDY_BAKED_ARGS,
+                  CMDY_CONFIG, _CMDY_BAKED_ARGS, cmdy_plugin_add_method,
                   cmdy_plugin_hold_then, cmdy_plugin_run_then, cmdy_plugin_async_run_then)
 import curio
 
@@ -26,6 +26,27 @@ def test_plugin():
 
     p.enable()
     assert p.enabled
+
+def test_add_method_string():
+
+    @cmdy_plugin
+    class PluginWithString:
+        @cmdy_plugin_add_method("CmdyHolding")
+        def _xyz(self):
+            return 1
+
+        @cmdy_plugin_add_property("CmdyHolding")
+        def _mno(self):
+            return 2
+
+        @cmdy_plugin_hold_then
+        def xyz(self):
+            return self._xyz() + self._mno
+
+    pws = PluginWithString()
+
+    xyz = cmdy.echo().xyz()
+    assert xyz == 3
 
 def test_cmdy_plugin_add_method():
 
