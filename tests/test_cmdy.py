@@ -1,6 +1,6 @@
 import sys
 import tempfile
-from path import Path
+from pathlib import Path
 from contextlib import contextmanager
 from diot import Diot
 import pytest
