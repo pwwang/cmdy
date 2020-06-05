@@ -1,5 +1,5 @@
 # cmdy
-"Shell language" to command in python
+"Shell language" to run command in python
 
 [![pypi][1]][2] [![tag][3]][4] [![travis][5]][6] [![codacy quality][7]][8] [![codacy quality][9]][8] ![pyver][10]
 
