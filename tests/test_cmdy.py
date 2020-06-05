@@ -36,9 +36,12 @@ def captured():
     return wrapper
 
 def test_holding_new():
-
-    ret = CmdyHolding(*_cmdy_parse_args('echo', ['echo', '123'], {},
-                                        CMDY_CONFIG, _CMDY_BAKED_ARGS))
+    args, kwargs, cfgargs, popenargs = _cmdy_parse_args(
+        'echo', ['echo', '123'], {}, CMDY_CONFIG, _CMDY_BAKED_ARGS
+    )
+    cfgargs_copy = CMDY_CONFIG.copy()
+    cfgargs_copy.update(cfgargs)
+    ret = CmdyHolding(args, kwargs, cfgargs_copy, popenargs, '')
     assert isinstance(ret, CmdyResult)
 
 def test_normal_run():
@@ -67,6 +70,12 @@ def test_bake_error():
 
     with pytest.raises(CmdyActionError):
         cmdy.echo.bake(n=True).bake()
+
+def test_bake_sub():
+
+    git = cmdy.git.bake(_sub=True)
+    c = git().branch(v=True).h
+    assert c.strcmd == 'git branch -v'
 
 def test_bake_revert():
 

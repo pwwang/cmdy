@@ -282,9 +282,13 @@ def test_hold_then():
     assert callable(Plugin.test.enable)
     p = Plugin()
     assert callable(CmdyHolding.test.fget)
-    h = CmdyHolding(*_cmdy_parse_args('echo', ['echo', '123'], {},
-                                      CMDY_CONFIG, _CMDY_BAKED_ARGS),
-                                      will='test').test()
+    args, kwargs, config, pconfig = _cmdy_parse_args(
+        'echo', ['echo', '123'], {},
+        CMDY_CONFIG, _CMDY_BAKED_ARGS
+    )
+    config_copy = CMDY_CONFIG.copy()
+    config_copy.update(config)
+    h = CmdyHolding(args, kwargs, config_copy, pconfig, will='test').test()
     assert h.stdin == 123
 
 def test_run_then():

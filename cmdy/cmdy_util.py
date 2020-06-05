@@ -19,9 +19,6 @@ DEVNULL = devnull
 # Sometimes we may occasionally use envs instead env
 POPEN_ARG_KEYS = inspect.getfullargspec(Popen).args + ['envs']
 
-class CmdyBakingError(Exception):
-    """Baking from non-keyword arguments"""
-
 class CmdyActionError(Exception):
     """Wrong actions taken"""
 
@@ -249,14 +246,15 @@ def _cmdy_compose_arg_segment(cmd_args: dict,
 
 def _cmdy_normalize_config(config: Diot):
     """Normalize shell and okcode to list"""
-    if isinstance(config.okcode, str):
-        config.okcode = [okc.strip()
-                         for okc in config.okcode.split(',')]
-    if not isinstance(config.okcode, list):
-        config.okcode = [config.okcode]
-    config.okcode = [int(okc) for okc in config.okcode]
+    if 'okcode' in config:
+        if isinstance(config.okcode, str):
+            config.okcode = [okc.strip()
+                             for okc in config.okcode.split(',')]
+        if not isinstance(config.okcode, list):
+            config.okcode = [config.okcode]
+        config.okcode = [int(okc) for okc in config.okcode]
 
-    if config.shell:
+    if 'shell' in config:
         if config.shell is True:
             config.shell = ['/bin/bash', '-c']
         if not isinstance(config.shell, list):
@@ -359,7 +357,7 @@ def _cmdy_parse_single_kwarg(kwarg: dict,
     Warns:
         UserWarning: When `encoding` or `shell` passed as popen configs
     """
-    global_config = global_config.copy()
+    # global_config = global_config.copy()
 
     # scan for configuration first
     local_config = Diot()
@@ -405,9 +403,9 @@ def _cmdy_parse_single_kwarg(kwarg: dict,
         local_config.encoding = popen_config.pop('encoding')
         warnings.warn("Please use cmdy_encoding instead of popen_encoding.")
 
-    global_config.update(local_config)
+    #global_config.update(local_config)
 
-    return (pure_cmd_kwargs, global_config, popen_config)
+    return (pure_cmd_kwargs, local_config, popen_config)
 
 def _cmdy_parse_args(name: str,
                      args: tuple,
@@ -448,13 +446,15 @@ def _cmdy_parse_args(name: str,
     )
 
     global_config.update(baked_config)
-    pure_cmd_kwargs, global_config, popen_config = _cmdy_parse_single_kwarg(
+    pure_cmd_kwargs, local_config, popen_config = _cmdy_parse_single_kwarg(
         kwargs,
         is_root=True,
         global_config=global_config
     )
 
     ret_kwargs.update(pure_cmd_kwargs)
+
+    baked_config.update(local_config)
 
     baked_popen_args.update(popen_config)
     popen_config = baked_popen_args
@@ -474,6 +474,7 @@ def _cmdy_parse_args(name: str,
                 continue
             lconfig = global_config.copy()
             lconfig.update(local_config)
+            lconfig.update(baked_config)
             ret_args.extend(_cmdy_compose_arg_segment(
                 pure_cmd_kwargs_seg, lconfig
             ))
@@ -484,9 +485,9 @@ def _cmdy_parse_args(name: str,
     #     pure_cmd_kwargs, global_config
     # ))
 
-    _cmdy_normalize_config(global_config)
+    _cmdy_normalize_config(baked_config)
     _cmdy_fix_popen_config(popen_config)
-    return ret_args, ret_kwargs, global_config, popen_config
+    return ret_args, ret_kwargs, baked_config, popen_config
 
 def _cmdy_compose_cmd(args: list, kwargs: dict, config: Diot,
                       shell: "Union[list, bool]") -> list:

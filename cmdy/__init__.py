@@ -27,7 +27,7 @@ import curio as _curio
 from curio import subprocess as _subprocess
 from varname import will as _will
 from .cmdy_util import (STDIN, STDOUT, STDERR, DEVNULL,
-                        CmdyBakingError, CmdyActionError, CmdyTimeoutError,
+                        CmdyActionError, CmdyTimeoutError,
                         CmdyExecNotFoundError, CmdyReturnCodeError,
                         _cmdy_raise_return_code_error,
                         _cmdy_compose_cmd, _cmdy_parse_args,
@@ -50,7 +50,7 @@ _CMDY_DEFAULT_CONFIG = _Diot({
     'dupkey': False,
     'exe': None,
     'encoding': 'utf-8',
-    'okcode': 0,
+    'okcode': [0],
     'prefix': 'auto',
     'raise': True,
     'sep': ' ',
@@ -123,11 +123,14 @@ class Cmdy:
         ready_args = (self._args or []) + _args
         ready_kwargs = self._kwargs.copy() if self._kwargs else {}
         ready_kwargs.update(_kwargs)
-        ready_cfgargs = self._cfgargs.copy() if self._cfgargs else _Diot()
+        ready_cfgargs = CMDY_CONFIG.copy()
+        ready_cfgargs.update(self._cfgargs or {})
         ready_cfgargs.update(_cfgargs)
         ready_popenargs = self._popenargs.copy() if self._popenargs else _Diot()
         ready_popenargs.update(_popenargs)
 
+        # clear direct subcommand for reuse
+        self._args = []
 
         if ready_cfgargs.pop('sub', False):
             return CmdyHoldingWithSub(
