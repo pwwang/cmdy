@@ -569,9 +569,9 @@ ls().hello # prints Hello world!
 ```
 
 
-[1]: https://img.shields.io/pypi/v/pyppl-report?style=flat-square
-[2]: https://pypi.org/project/pyppl-report/
-[3]: https://img.shields.io/github/tag/pwwang/pyppl-report?style=flat-square
+[1]: https://img.shields.io/pypi/v/cmdy?style=flat-square
+[2]: https://pypi.org/project/cmdy/
+[3]: https://img.shields.io/github/tag/pwwang/cmdy?style=flat-square
 [4]: https://github.com/pwwang/cmdy
 [5]: https://img.shields.io/travis/pwwang/cmdy?style=flat-square
 [6]: https://travis-ci.org/pwwang/cmdy
