@@ -858,13 +858,17 @@ class CmdyPluginPipe:
             return orig_run(self, wait)
 
         prior = self.data.pipe['from']
-        prior_result = prior.run()
+        prior_result = prior.run(False)
+        self.data.pipe['from'] = prior
 
         self.stdin = (prior_result.proc.stdout
                       if prior.data.pipe.which == STDOUT
                       else prior_result.proc.stderr)
 
-        return orig_run(self, wait)
+        ret = orig_run(self, wait)
+        prior_result.wait()
+        return ret
+
 
 @cmdy_plugin
 class CmdyPluginIter:
