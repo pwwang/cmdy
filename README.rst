@@ -8,12 +8,12 @@ cmdy
 "Shell language" to run command in python
 
 `
-.. image:: https://img.shields.io/pypi/v/pyppl-report?style=flat-square
-   :target: https://img.shields.io/pypi/v/pyppl-report?style=flat-square
+.. image:: https://img.shields.io/pypi/v/cmdy?style=flat-square
+   :target: https://img.shields.io/pypi/v/cmdy?style=flat-square
    :alt: pypi
- <https://pypi.org/project/pyppl-report/>`_ `
-.. image:: https://img.shields.io/github/tag/pwwang/pyppl-report?style=flat-square
-   :target: https://img.shields.io/github/tag/pwwang/pyppl-report?style=flat-square
+ <https://pypi.org/project/cmdy/>`_ `
+.. image:: https://img.shields.io/github/tag/pwwang/cmdy?style=flat-square
+   :target: https://img.shields.io/github/tag/pwwang/cmdy?style=flat-square
    :alt: tag
  <https://github.com/pwwang/cmdy>`_ `
 .. image:: https://img.shields.io/travis/pwwang/cmdy?style=flat-square
