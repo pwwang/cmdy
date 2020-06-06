@@ -236,7 +236,8 @@ def _cmdy_compose_arg_segment(cmd_args: dict,
                     ret.append(val)
             else:
                 if i == 0 or config.dupkey:
-                    ret.append(f'{prefix}{key}{sep}{val}')
+                    ret.append(f'{prefix}{key}' +
+                               ('' if val is True else sep + str(val)))
                 elif val is not True:
                     ret.append(val)
 
