@@ -21,8 +21,8 @@ if os.path.exists(readme_path):
 setup(
     long_description=readme,
     name='cmdy',
-    version='0.2.2',
-    description='A handy package to run command from python',
+    version='0.3.1',
+    description='Shell language to run command in python',
     python_requires='==3.*,>=3.6.0',
     project_urls={
         "homepage": "https://github.com/pwwang/cmdy",
@@ -31,9 +31,12 @@ setup(
     author='pwwang',
     author_email='pwwang@pwwang.com',
     license='MIT',
-    packages=[],
+    packages=['cmdy'],
     package_dir={"": "."},
     package_data={},
-    install_requires=['modkit', 'python-simpleconf'],
+    install_requires=[
+        'curio==1.*,>=1.2.0', 'diot', 'modkit', 'python-simpleconf',
+        'python-varname'
+    ],
     extras_require={"dev": ["pytest", "pytest-cov"]},
 )

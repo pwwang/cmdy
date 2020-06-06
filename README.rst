@@ -1,8 +1,11 @@
+.. role:: raw-html-m2r(raw)
+   :format: html
+
 
 cmdy
 ====
 
-A handy package to run command from python
+"Shell language" to run command in python
 
 `
 .. image:: https://img.shields.io/pypi/v/pyppl-report?style=flat-square
@@ -35,344 +38,621 @@ Installation
 
 .. code-block:: shell
 
-   # latest version
-   pip install git+https://github.com/pwwang/cmdy
-   # released version
    pip install cmdy
 
-Why another one beyond ``sh``\ ?
-----------------------------------
+Usage
+-----
 
-
-* ``oncotator`` not running with ``sh``\ , no matter what I tried.
-* Unable to replace arguments with baked command, see example below:
-  .. code-block:: python
-
-     from sh import ls
-     ls = ls.bake(l = True)
-     print(ls()) # ls -l
-     # but now I somehow want to run `ls` (without `-l`) command with `ls()`
-     ls(l = False) # not work
-
-* Unable to save configurations for commands, since commands have their solid preferences.
-* Unable to specify full path of an executable.
-* No pipe/redirection notations.
+See `Demo <./demo.ipynb>`_
 
 Basic usage
------------
+^^^^^^^^^^^
 
 .. code-block:: python
 
    from cmdy import ls
    print(ls())
 
-With arguments
-^^^^^^^^^^^^^^
+.. code-block:: python
 
-Like ``sh``\ , ``cmdy`` can have non-keyword arguments, but keyword arguments preferred.
+   for line in ls().iter():
+       print('Got:', line, end='')
+
+With non-keyword arguments
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
    from cmdy import tar
-   tar("cvf", "/tmp/test.tar", "/my/home/directory/")
+   print(tar("cvf", "/tmp/test.tar", "./cmdy"))
 
 With keyword arguments
-^^^^^^^^^^^^^^^^^^^^^^
+~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-   curl("http://duckduckgo.com/", o="page.html", silent=True)
-   # curl http://duckduckgo.com/ -o page.html --silent
+   from cmdy import curl
+   curl("http://duckduckgo.com/", o="/tmp/page.html", silent=True)
+   # curl http://duckduckgo.com/ -o /tmp/page.html --silent
 
-**Order keyword arguments:**
+Order keyword arguments
+~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-   curl("http://duckduckgo.com/", "-o", "page.html", "--silent")
+   curl("http://duckduckgo.com/", "-o", "/tmp/page.html", "--silent")
    # or
-   from collections import OrderedDict
-   curl("http://duckduckgo.com/", OrderedDict([('o', 'page.html'), ('silent', True)]))
 
-**Prefix and separator for keyword arguments:**
+   from diot import OrderedDiot
+   kwargs = OrderedDiot()
+   kwargs.silent = True
+   kwargs.o = '/tmp/page.html'
+   curl("http://duckduckgo.com/", kwargs)
+   # You can also use collections.OrderedDict
+
+Prefix and separator for keyword arguments
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-   from cmdy import bedtools, bcftools, ls
-   bedtools.intersect(wa = True, wb = True, a = 'query.bed', b = ['d1.bed', 'd2.bed', 'd3.bed'], names = ['d1', 'd2', 'd3'], sorted = True, _prefix = '-')
-   #bedtools intersect -wa -wb -a query.bed -b d1.bed d2.bed d3.bed -names d1 d2 d3 -sorted
+   from cmdy import bedtools, bcftools
+   bedtools.intersect(wa=True, wb=True,
+                      a='query.bed', b=['d1.bed', 'd2.bed', 'd3.bed'],
+                      names=['d1', 'd2', 'd3'], sorted=True,
+                      _prefix='-').h().strcmd
+   # 'bedtools intersect -wa -wb -a query.bed \
+   # -b d1.bed d2.bed d3.bed -names d1 d2 d3 -sorted'
 
-   bcftools.query(_ = ['a.vcf', 'b.vcf'], H = True, format = '%CHROM\t%POS\t%REF\t%ALT\n')
-   # bcftools query --format '%CHROM\t%POS\t%REF\t%ALT\n' -H a.vcf b.vcf
-   # _prefix defaults to 'auto' ('-' for short options, '--' for long)
-   # You may also define arbitrary prefix:
-   # command(a = 1, bc = 2, _prefix = '---')
-   # command ---a 1 ---bc 2
+.. code-block:: python
 
-   ls(l = True, block_size = 'KB', _sep = 'auto')
-   # ls -l --block-size=KB
-   # _sep defaults to ' '. 'auto' means ' ' for short options, '=' for long
+   # default prefix is auto
+   bcftools.query(_=['a.vcf', 'b.vcf'], H=True,
+                  format='%CHROM\t%POS\t%REF\t%ALT\n').h().strcmd
 
-**Different combinations of prefices and separators in one command:**
+   # "bcftools query -H --format '%CHROM\t%POS\t%REF\t%ALT\n' a.vcf b.vcf"
+
+   ls(l=True, block_size='KB', _sep='auto').h().cmd
+   ['ls', '-l', '--block-size=KB']
+
+Mixed combinations of prefices and separators in one command
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
    from cmdy import java
-   # Note this is just an example for old verion picard. Picard is changing it's style
-   java({'jar': 'picard.jar', '_prefix': '-', '_sep': ' '}, 'SortSam', I = 'input.bam', O = 'sorted.bam', SORTED_ORDER = 'coordinate', _raw = True, _prefix = '', _sep = '=')
-   # java -jar picard.jar SortSam I=input.bam O=sorted.bam SORT_ORDER=coordinate
-   # The first dictionary usees _prefix and _sep in itself if specified, otherwise uses the ones specified with kwargs.
-   # _raw = True keeps SORTED_ORDER as it is, otherwise, it'll be transformed into SORTED-ORDER
-   # This is useful when some command has option like '--block-size', but you can still use 'block_size' as keyword argument.
+   # Note this is just an example for old verion picard.
+   # Picard is changing it's style
 
-**Duplicated keys for list arguments:**
+   picard = java(jar='picard.jar', _prefix='', _sep='=', _sub=True)
+   c = picard.SortSam(I='input.bam', O='sorted.bam',
+                  SORTED_ORDER='coordinate',
+                  _prefix='', _sep='=', _deform=None).h
+   print(c.cmd)
+
+   # same as the above
+   java({'jar': 'picard.jar', '_prefix': '-', '_sep': ' '},
+        'SortSam', I='input.bam', O='sorted.bam',
+        SORTED_ORDER='coordinate', _prefix='', _sep='=', _deform=None).h().cmd
+
+   # _deform prevents SORTED_ORDER to be deformed to SORTED-ORDER
+
+   # ['java', 'jar=picard.jar',
+   #  'SortSam', 'I=input.bam', 'O=sorted.bam', 'SORTED_ORDER=coordinate']
+
+Subcommands
+~~~~~~~~~~~
+
+.. code-block:: python
+
+   from cmdy import git
+   git.branch(v=True).fg
+   # <CmdyResult: ['git', 'branch', '-v']>
+
+.. code-block:: python
+
+   # What if I have separate arguments for main and sub-command?
+   git(git_dir='.', _sub=True).branch(v=True).h
+   # <CmdyHolding: ['git', '--git-dir', '.', 'branch', '-v']>
+
+Duplicated keys for list arguments:
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
    from cmdy import sort
-   sort(k = ['1,1', '2,2n'], _ = 'a.bed', _dupkey = True)
-   # sort -k 1,1 -k 2,2n a.bed
+   print(sort(k=['1,1', '2,2'], t='_', _='./.editorconfig', _dupkey=True))
+   # sort -k 1,1 -k 2,2 ./.editorconfig
 
-Return codes and exceptions
----------------------------
+Return code and exception
+^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: python
 
    from cmdy import x
    x()
 
-.. code-block:: shell
+```python console
+Traceback (most recent call last):
+  File "<ipython-input-16-092cc5b72e61>", line 2, in :raw-html-m2r:`<module>`
+    x()
+/path/.../to/cmdy/\ **init**.py", line 146, in **call**
+    ready_cfgargs, ready_popenargs, _will())
+/path/.../to/cmdy/\ **init**.py", line 201, in **new**
+    result = holding.run()
+/path/.../to/cmdy/\ **init**.py", line 854, in run
+    return orig_run(self, wait)
+/path/.../to/cmdy/\ **init**.py", line 717, in run
+    return orig_run(self, wait)
+/path/.../to/cmdy/\ **init**.py", line 327, in run
+    ret = CmdyResult(self._run(), self)
+/path/.../to/cmdy/\ **init**.py", line 271, in _run
+    raise CmdyExecNotFoundError(str(fnfe)) from None
+cmdy.cmdy_util.CmdyExecNotFoundError: [Errno 2] No such file or directory: 'x': 'x'
 
-       ... ...
-       raise CmdyReturnCodeException(self)
-             │                       └
-             └ <class 'cmdy.CmdyReturnCodeException'>
-   cmdy.CmdyReturnCodeException: Unexpected RETURN CODE 127, expecting: [0]
+.. code-block::
 
-     [PID]    38254
 
-     [CMD]    x
+   ```python
+   from cmdy import ls
+   ls('non-existing-file')
 
-     [STDERR] /bin/sh: x: command not found
+```python console
 
-You can use try/catch to catch it:
+Traceback (most recent call last):
+  File "<ipython-input-17-132683fc2227>", line 2, in :raw-html-m2r:`<module>`
+    ls('non-existing-file')
+/path/.../to/cmdy/\ **init**.py", line 146, in **call**
+    ready_cfgargs, ready_popenargs, _will())
+/path/.../to/cmdy/\ **init**.py", line 204, in **new**
+    return result.wait()
+/path/.../to/cmdy/\ **init**.py", line 407, in wait
+    raise CmdyReturnCodeError(self)
+cmdy.cmdy_util.CmdyReturnCodeError: Unexpected RETURN CODE 2, expecting: [0]
+
+  [   PID] 167164
+
+  [   CMD] ['ls non-existing-file']
+
+  [STDOUT]
+
+  [STDERR] ls: cannot access non-existing-file: No such file or directory
+
+.. code-block::
+
+
+   #### Don't raise exception but store the return code
+   ```python
+   from cmdy import ls
+   result = ls('non-existing-file', _raise=False)
+   result.rc # 2
+
+Tolerance on return code
+~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-   from cmdy import x, CmdyReturnCodeException
-   try:
-     x()
-   except CmdyReturnCodeException as ex
-     print('Command returned %s' % ex.cmdy.rc)
+   from cmdy import ls
+   # or _okcode=[0,2]
+   ls('non-existing-file', _okcode='0,2').rc # 2
 
-You can allow multiple return codes by: ``x(_okcode = [0, 127])`` or ``x(_okcode = '0,127')``
-
-Redirection
------------
+Timeouts
+^^^^^^^^
 
 .. code-block:: python
 
-   from cmdy import ifconfig
-   ifconfig(_out="/tmp/interfaces")
-   # or you can use shell redirection notation
-   ifconfig(_out = ">") > "/tmp/interfaces"
-   # or
-   # ifconfig(_out = "/tmp/interfaces")
+   from cmdy import sleep
+   sleep(3, _timeout=1)
 
-   ## append
-   ifconfig(_out = ">") >> "/tmp/interfaces"
-   # or
-   # ifconfig(_out_ = "/tmp/interfaces")
+```python console
+Traceback (most recent call last):
+  File "<ipython-input-20-47b0ec7af55f>", line 2, in :raw-html-m2r:`<module>`
+    sleep(3, _timeout=1)
+/path/.../to/cmdy/\ **init**.py", line 146, in **call**
+    ready_cfgargs, ready_popenargs, _will())
+/path/.../to/cmdy/\ **init**.py", line 204, in **new**
+    return result.wait()
+/path/.../to/cmdy/\ **init**.py", line 404, in wait
+    ) from None
+cmdy.cmdy_util.CmdyTimeoutError: Timeout after 1 seconds.
 
-   # redirect stderr
-   ifconfig(_err = ">") > "/tmp/ifconfig.errors"
-   # or ifconfig(_err = "/tmp/ifconfig.errors")
+.. code-block::
 
-Iteration on output
--------------------
+
+   ### Redirections
+   ```python
+   from cmdy import cat
+   cat('./pytest.ini').redirect > '/tmp/pytest.ini'
+   print(cat('/tmp/pytest.ini'))
+
+Appending
+~~~~~~~~~
+
+.. code-block:: python
+
+   # r short for redirect
+   cat('./pytest.ini').r >> '/tmp/pytest.ini'
+   print(cat('/tmp/pytest.ini')) # content doubled
+
+Redirecting to a file handler
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   with open('/tmp/pytest.ini', 'w') as f
+       cat('./pytest.ini').r > f
+
+   print(cat('/tmp/pytest.ini'))
+
+STDIN, STDOUT and/or STDERR redirections
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from cmdy import STDIN, STDOUT, STDERR, DEVNULL
+
+   c = cat().r(STDIN) < '/tmp/pytest.ini'
+   print(c)
+
+.. code-block:: python
+
+   # Mixed
+   c = cat().r(STDIN, STDOUT) ^ '/tmp/pytest.ini' > DEVNULL
+   # we can't fetch result from a redirected pipe
+   print(c.stdout)
+
+   # Why not '<' for STDIN?
+   # Because the priority of the operator is not in sequential order.
+   # We can use < for STDIN, but we need to ensure it runs first
+   c = (cat().r(STDIN, STDOUT) < '/tmp/pytest.ini') > DEVNULL
+   print(c.stdout)
+
+   # A simple rule for multiple redirections to always use ">" in the last place
+
+.. code-block:: python
+
+   # Redirect stderr to stdout
+   from cmdy import bash
+   c = bash(c="cat 1>&2").r(STDIN, STDERR) ^ '/tmp/pytest.ini' > STDOUT
+   print(c.stdout)
+
+.. code-block:: python
+
+   # Redirect the world
+   c = bash(c="cat 1>&2").r(STDIN, STDOUT, STDERR) ^ '/tmp/pytest.ini' ^ DEVNULL > STDOUT
+   print(c.stdout) # None
+   print(c.stderr) # None
+
+Pipings
+^^^^^^^
+
+.. code-block:: python
+
+   from cmdy import grep
+   c = ls().p | grep('README')
+   print(c)
+   # README.md
+   # README.rst
+
+.. code-block:: python
+
+   # p short for pipe
+   c = ls().p | grep('README').p | grep('md')
+   print(c) # README.md
+   print(c.piped_strcmds) # ['ls', 'grep README', 'grep md']
+
+.. code-block:: python
+
+   from cmdy import _CMDY_EVENT
+   # !!! Pipings should be consumed immediately!
+   # !!! DO NOT do this
+   ls().p
+   ls() # <- Will not run as expected
+   # All commands will be locked as holding until pipings are consumed
+   _CMDY_EVENT.clear()
+   print(ls()) # runs
+
+   # See Advanced/Holdings if you want to hold a piping command for a while
+
+Running command in foreground
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   ls().fg
 
 .. code-block:: python
 
    from cmdy import tail
-   for line in tail(_ = 'test.txt', _iter = True):
-     print(line)
+   tail('/tmp/pytest.ini', f=True, _timeout=3).fg
+   # This mimics the `tail -f` program
+   # You will see the content comes out one after another
+   # and then program hangs for 3s
 
-Background processes
---------------------
+You can also write an ``echo-like`` program easily. See '\ `echo.py <./echo.py>`_\ '
 
-For command you want to run it in non-block mode, you probably would like to use ``_bg`` keyword:
-
-.. code-block:: python
-
-   for line in tail(_ = 'test.txt', _bg = True, _iter = True):
-     print(line)
+Iterating on output
+^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: python
 
-   # blocks
-   sleep(3)
-   print("...3 seconds later")
+   for line in ls().iter():
+       print(line, end='')
 
-   # doesn't block
-   p = sleep(3, _bg=True)
-   print("prints immediately!")
-   p.wait()
-   print("...and 3 seconds later")
-
-Callbacks for background processes:
+Iterating on stderr
+~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
+   for line in bash(c="cat /tmp/pytest.ini 1>&2").iter(STDERR):
+       print(line, end='')
+
+Getting live output
+~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   # Like we did for `tail -f` program
+   # This time, we can do something with each output line
+
+   # Let's use a thread to write content to a file
+   # And we try to get the live contents using cmdy
    import time
-   from cmdy import sleep
-   def callback(cmdy):
-     print(cmdy.rc)
-   p = sleep(3, _bg = callback)
-   p.wait()
-   # prints 0
+   from threading import Thread
+   def live_write(file, n):
 
-Baking
-------
+       with open(file, 'w', buffering=1) as f:
+           # Let's write something every half second
+           for i in range(n):
+               f.write(str(i) + '\n')
+               time.sleep(.5)
+
+   test_file = '/tmp/tail-f.txt'
+   Thread(target=live_write, args=(test_file, 10)).start()
+
+   from cmdy import tail
+
+   tail_iter = tail(f=True, _=test_file).iter()
+
+   for line in tail_iter:
+       # Do whatever you want with the line
+       print('We got:', line, end='')
+       if line.strip() == '8':
+           break
+
+   # make sure thread ends
+   time.sleep(2)
 
 .. code-block:: python
 
-   from cmdy import java
-   picard = java.bake(dict(jar = 'picard.jar', _sep = ' ', _prefix = '-'))
-   #picard.SortSam(...)
+   # What about timeout?
 
-Unlike ``sh``\ , ``cmdy`` holds the keyword arguments, and updates them while baked into a new command. This enables it to replace some arguments with the new baked command.
+   # Of course you can use a timer to check inside the loop
+   # You can also set a timeout for each fetch
+
+   # Terminate after 10 queries
+
+   Thread(target=live_write, args=(test_file, 10)).start()
+
+   from cmdy import tail
+
+   tail_iter = tail(f=True, _=test_file).iter()
+
+   for i in range(10):
+       print('We got:', tail_iter.next(timeout=1), end='')
+
+Advanced
+^^^^^^^^
+
+Baking the ``cmdy`` object
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Sometimes, you may want to run the same program a couple of times, with the same set of arguments or configurations, and you don't want to type those arguments every time, then you can bake the Cmdy object with that same arguments or configurations.
+
+For example, if you want to run ls as ls -l all the time:
 
 .. code-block:: python
 
    from cmdy import ls
+   ll = ls.bake(l=True)
+   print(ll().h.cmd) # ['ls', '-l']
+   print(ll(a=True).h.cmd) # ['ls', '-l', '-a']
+   # I don't want the l flag for some commands occasionally
+   print(ll(l=False).h.cmd) # ['ls']
 
-   ls = ls.bake(l = True)
-   # or ls = ls(l = True, _bake = True)
-   ls() # ls -l
-
-   # I don't want -l anymore
-   ls(l = False)
-
-Note that non-keyword arguments is not updatable.
+   # Bake a baked command
+   lla = ll.bake(a=True)
+   print(lla().h.cmd) # ['ls', '-l', '-a']
 
 .. code-block:: python
 
-   ls = ls.bake('-l')
-   ls() # ls -l
+   # I know git is always gonna run with subcommand
+   git = git.bake(_sub=True)
+   # don't bother to pass _sub=True every time
+   print(git(git_dir='.').branch(v=True).h)
+   # <CmdyHolding: ['git', '--git-dir', '.', 'branch', '-v']>
+   print(git().status().h)
+   # <CmdyHolding: ['git', 'status']>
 
-   # Not work, still ls -l
-   ls(l = False)
+.. code-block:: python
 
-Bake the whole module:
+   # What if I have a subcommand call 'bake'?
+   from cmdy import git, CmdyActionError
+
+   print(git.branch().h.cmd) # ['git', 'branch']
+   print(type(git.bake())) # <class 'cmdy.Cmdy'>
+
+   # run the git with _sub
+   print(git(_sub=True).bake().h.cmd) # ['git', 'bake']
+
+Baking the whole module
+~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
    import cmdy
-   cmdy = cmdy(_fg = True)
-   # all commands under new module is running at foreground (stdout = sys.stdout, stderr = stderr)
+   # run version of the whole world
+   sh = cmdy(version=True)
+   # anything under sh directly will be supposed to have subcommand
+   from sh import git, gcc
+   print(git().h)
+   # <CmdyHolding: ['git', '--version']>
+   print(gcc().h)
+   # <CmdyHolding: ['gcc', '--version']>
+
+Note that module baking is deep copying, except the exception classes and some utils. This means, you would expect following behavior:
+
+.. code-block:: python
+
+   import cmdy
+   from cmdy import CmdyHolding, CmdyExecNotFoundError
+
+   sh = cmdy()
+
+   c = sh.echo().h
+   print(type(c)) # <class 'cmdy.CmdyHolding'>
+   print(isinstance(c, CmdyHolding)) # False
+   print(isinstance(c, sh.CmdyHolding)) # True
+
+   try:
+       sh.notexisting()
+   except CmdyExecNotFoundError:
+       # we can catch it, as CmdyExecNotFoundError is sh.CmdyExecNotFoundError
+       print('Catched!')
+
+Holding objects
+~~~~~~~~~~~~~~~
+
+You may have noticed that we have a couple of examples above with a final call .h or .h(), which is holding the command from running.
+
+You can do that, too, if you have multiple operations
+
+.. code-block:: python
+
+   print(ls().h) # <CmdyHolding: ['ls']>
+
+   # however, you cannot hold after some actions
+   ls().r.h
+   # CmdyActionError: Should be called in the first place: .h() or .hold()
+
+Once a command is on hold (by .h, .hold, .h() or .hold())
+
+You have to explictly call run() to set the command running
+
+.. code-block:: python
+
+   from time import time
+   tic = time()
+   c = sleep(2).h
+   print(f'Time elapsed: {time() - tic:.3f} s')
+   # Time elapsed: 0.022 s
+
+   # not running even with fg
+   c.fg
+   print(f'Time elapsed: {time() - tic:.3f} s')
+   # Time elapsed: 0.034 s
+   c.run()
+   print(f'Time elapsed: {time() - tic:.3f} s')
+   # Time elapsed: 2.043 s
+
+Reuse of command
+~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   # After you set a command running,
+   # you can retrieve the holding object,
+   # and reuse it
    from cmdy import ls
-   ls()
+   c = ls().fg
+   # nothing will be produced
+   c.holding.reset().r > DEVNULL
 
-Piping
-------
-
-.. code-block:: python
-
-   # get the permission column
-   ls(l = True, _pipe = True) | cut(f = 1, _fg = True)
-
-Sub-commands
-------------
+Async mode
+~~~~~~~~~~
 
 .. code-block:: python
 
-   from cmdy import git
-   print(git.branch(v = True))
+   import curio
+   from cmdy import ls
+   a = ls().a # async command is never blocking!
 
-Aliasing/Specifying full path of executables for commands
----------------------------------------------------------
+   async def main():
+       async for line in a:
+           print(line, end='')
 
-.. code-block:: python
+   curio.run(main())
 
-   from cmdy import fc_cache, python
-   fc_cache(_exe = 'fc-cache', vf = '~/.fonts/', _prefix = '-')
-   # fc-cache -vf ~/.fonts/
+Extending ``cmdy``
+~~~~~~~~~~~~~~~~~~~~~~
 
-   python(_exe = '/home/user/miniconda3/bin/python3', version = True)
-   # /home/user/miniconda3/bin/python3 --version
+All those actions for holding/result objects were implemented internally as plugins. You can right your own plugins, too.
 
-Always alias ``fc_cache`` to ``fc-cache`` and point ``python`` to ``/home/user/miniconda3/bin/python3``\ , add the following to your ``~/.cmdy.ini``
+A plugin has to be defined as a class and then instantiated.
 
-.. code-block:: ini
+**There are 6 APIs for developing a plugin for ``cmdy``\ **
 
-   [fc_cache]
-   _exe = fc-cache
 
-   [python]
-   _exe = /home/user/miniconda3/bin/python3
+* ``cmdy_plugin``\ : A decorator for the plugin class
+* `cmdy_plugin_hold_then`: A decorator to decorate methods in the plugin class, which define actions after a holding object. Arguments:
 
-Then you don't need to care about the paths any more:
+  * ``alias``\ : The alias of this action (e.g. ``r/redir`` for ``redirect``\ )
+  * ``final``\ : Whether this is a final action, meaning no other actions should be followed
+  * ``prop``\ : Whether this action can be called as a property
+  * ``hold_right``\ : Should I put right following action on hold? This is useful when we have connectors which then can set the command running. (e.g ``>`` for redirect and ``|`` for pipe)
 
-.. code-block:: python
+* ``cmdy_plugin_run_then``\ : A decorator to decorate methods in the plugin class, which define actions after a sync result object. Arguments are similar as ``cmdy_plugin_hold_then`` except that ``prop`` and ``hold_right`` are not avaialbe.
+* ``cmdy_plugin_async_run_then``\ : Async verion of ``cmdy_plugin_run_then``
+* ``cmdy_plugin_add_method``\ : A decorator to decorate methods in the plugin class, which add methods to the ``CmdyHolding``\ , ``CmdyResult`` or ``CmdyAsyncResult`` class. ``cls`` is the only argument that specifies which class we are hacking.
+* ``cmdy_plugin_add_property``\ : Property version of ``cmdy_plugin_add_method``
 
-   from cmdy import fc_cache, python
-   fc_cache(vf = '~/.fonts/', _prefix = '-')
-   # fc-cache -vf ~/.fonts/
+**Notes on name conflicts:**
 
-   python(version = True)
-   # /home/user/miniconda3/bin/python3 --version
+If we need to add the methods to multiple classes in the plugin with the same name, you can define a different name with extra underscore suffix(es).
 
-Configuration
--------------
+**Notes on module baking:**
 
-``cmdy`` will first load default arguments:
 
-.. code-block:: python
+* As we mentioned before, ``cmdy`` module baking are deep copying. So when we can pass the class name instead of the class itself (which you may be not sure which one to use, the orginal one or the one from the baking module) to the ``add_method`` and ``add_property`` hooks.
+* 
+  Plugin enable and disable only take effect within the same module. For example:
 
-   {
-     '_okcode'  : 0,
-     '_exe'     : None,
-     '_sep'     : ' ',
-     '_prefix'  : 'auto',
-     '_dupkey'  : False,
-     '_bake'    : False,
-     '_iter'    : False,
-     '_pipe'    : False,
-     '_raw'     : False,
-     '_timeout' : 0,
-     '_encoding': 'utf-8',
-     '_bg'      : False,
-     '_fg'      : False,
-     '_out'     : None,
-     '_out_'    : None,
-     '_err'     : None,
-     '_err_'    : None
-   }
+  .. code-block:: python
 
-And then try to load ``$HOME/.cmdy.ini``\ , ``./.cmdy.ini`` and environment variables starting with ``CMDY_``\ , so you can overwrite the configurations with temporary environment variables.
-
-For example, I want to always use raw keyword option:
-``~/.cmdy.ini``
-
-.. code-block:: ini
-
-   [default]
-   _raw: True
-
-``ontotator.py``\ :
+       import cmdy
+       from cmdy import CMDY_PLUGIN_FG
+       sh = cmdy()
+       # only affects cmdy not sh
+       CMDY_PLUGIN_FG.disable()
+       # to disable this plugin for sh as well:
+       sh.CMDY_PLUGIN_FG.disable()
 
 .. code-block:: python
 
-   from cmdy import oncotator
-   oncotator(log_name = '/path/to/log', ...)
-   # oncotator --log_name LOG_NAME ...
-   # you don't have to specify _raw = True any more.
+   # An example to define a plugin
+   from cmdy import (cmdy_plugin,
+                     cmdy_plugin_hold_then,
+                     cmdy_plugin_add_method,
+                     ls,
+                     CmdyActionError)
 
-**Override the settings with environment variable:**
+   @cmdy_plugin
+   class MyPlugin:
+       @cmdy_plugin_add_method("CmdyHolding")
+       def say_hello(self):
+           return 'Hello world!'
 
-.. code-block:: bash
+       @cmdy_plugin_hold_then('hello')
+       def helloworld(self):
+           print(self.say_hello())
+           # keep chaining
+           return self
 
-   export CMDY_oncotator__raw=False
-   python oncotator.py
-   # will run:
-   # oncotator --log-name LOG_NAME ...
-   #                ^
+   myplugin = MyPlugin()
+
+   # command will never run,
+   # because we didn't do self.run() in helloworld(self)
+   ls().helloworld() # prints Hello world!
+   # property calls enabled by default
+   ls().helloworld # prints Hello world!
+   # we have alias
+   ls().hello # prints Hello world!
