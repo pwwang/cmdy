@@ -41,7 +41,7 @@ from .cmdy_plugin import _cmdy_hook_class, _CmdyPluginProxy
 # pylint: disable=wrong-import-order
 from modkit import modkit as _modkit
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"
 
 # We cannot define the variables that need to be baked
 # in submodules, because we don't want to deepcopy the

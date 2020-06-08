@@ -21,7 +21,7 @@ if os.path.exists(readme_path):
 setup(
     long_description=readme,
     name='cmdy',
-    version='0.3.2',
+    version='0.3.3',
     description='Shell language to run command in python',
     python_requires='==3.*,>=3.6.0',
     project_urls={
