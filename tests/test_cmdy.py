@@ -793,3 +793,7 @@ def test_subcommand_from_import():
     ll = ls.bake(l=True)
     c = git(git_dir='.', _sub=True).branch(v=True).h
     assert c.strcmd == 'git --git-dir . branch -v'
+
+def test_env():
+    a = cmdy.bash(c='echo $A', _env=dict(A=1))
+    assert a.int() == 1
