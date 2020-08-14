@@ -102,7 +102,8 @@ def _plugin_then(cls, func, aliases,
     @wraps(func)
     def wrapper(self, *args, **kwargs):
         # Update actions
-        self.did, self.curr, self.will = self.curr, self.will, will(2)
+        self.did, self.curr = self.curr, self.will
+        self.will = will(2, raise_exc=False)
 
         if self.curr in finals and self.will in proxy.holding_left:
             raise CmdyActionError("Action taken after a final action.")

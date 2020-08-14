@@ -145,11 +145,12 @@ class Cmdy:
 
         # Let CmdyHolding handle the result
         return CmdyHolding([str(exe)] + ready_args, ready_kwargs,
-                           ready_cfgargs, ready_popenargs, _will())
+                           ready_cfgargs, ready_popenargs,
+                           _will(raise_exc=False))
 
     def _bake(self, **kwargs):
         """Bake a command"""
-        if _will():
+        if _will(raise_exc=False):
             raise CmdyActionError("Baking Cmdy object is supposed to "
                                   "be reused.")
 
@@ -298,8 +299,9 @@ class CmdyHolding:
 
         self.data['async'] = True
         # update actions
-        self.did, self.curr, self.will = self.curr, self.will, _will(2)
-
+        self.did, self.curr, self.will = (
+            self.curr, self.will, _will(2, raise_exc=False)
+        )
         if self._onhold():
             return self
         return self.run()
@@ -312,7 +314,9 @@ class CmdyHolding:
         """Put the command on hold"""
         # Whever hold is called
         self.data['hold'] = True
-        self.did, self.curr, self.will = self.curr, self.will, _will(2)
+        self.did, self.curr, self.will = (
+            self.curr, self.will, _will(2, raise_exc=False)
+        )
 
         if self.data['async'] or len(self.data) > 2:
             raise CmdyActionError("Should be called in "

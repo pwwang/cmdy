@@ -258,8 +258,10 @@ def test_module_baking():
     sh = cmdy(n=True)
     assert id(sh._CMDY_EVENT) != id(_CMDY_EVENT)
     assert id(sh._CMDY_BAKED_ARGS) != id(cmdy._CMDY_BAKED_ARGS)
-    assert sh.Cmdy('echo')(_=123).strcmd == 'echo -n 123'
-    assert cmdy.echo(123).strcmd == 'echo 123'
+    strcmd = sh.Cmdy('echo')(_=123).strcmd
+    assert strcmd == 'echo -n 123'
+    strcmd = cmdy.echo(123).strcmd
+    assert strcmd == 'echo 123'
 
     # test event blocking
     cmdy.echo().p()
@@ -298,7 +300,8 @@ def test_timeout():
     cmdy.sleep(.1, cmdy_timeout=.5)
 
 def test_pid():
-    assert isinstance(cmdy.echo().pid, int)
+    pid = cmdy.echo().pid
+    assert isinstance(pid, int)
 
 def test_returncode_error():
 
@@ -347,12 +350,15 @@ def test_piped_cmds():
     assert c.piped_strcmds == ['echo 123', 'cat']
     assert c.piped_cmds == [['echo', '123'], ['cat']]
 
-    assert cmdy.echo(123).piped_cmds == [['echo', '123']]
-    assert cmdy.echo(123).piped_strcmds == ['echo 123']
+    piped_cmds = cmdy.echo(123).piped_cmds
+    assert piped_cmds == [['echo', '123']]
+    piped_strcmds = cmdy.echo(123).piped_strcmds
+    assert piped_strcmds == ['echo 123']
     _CMDY_EVENT.clear()
     c = cmdy.echo(123)
     assert isinstance(c, CmdyResult)
-    assert c.piped_cmds == [['echo', '123']]
+    piped_cmds = c.piped_cmds
+    assert piped_cmds == [['echo', '123']]
 
 def test_reprs():
     c = cmdy.echo(123).h()

@@ -305,7 +305,7 @@ def test_run_then():
 
 
 def test_final():
-
+    # cmd = cmdy.echo().h()
     with pytest.raises(CmdyActionError):
         cmdy.echo().h().fg().iter()
 
@@ -336,9 +336,12 @@ def test_run_then_async():
 
     assert curio.run(c.rc) == 0
     assert curio.run(c.rc) == 0 # trigger self._rc is not None
-    assert curio.run(c.out()) == '123'
+    out = curio.run(c.out())
+    assert out == '123'
 
     c = cmdy.echo('1\n2\n3').async_()
-    assert curio.run(c.list()) == ['1', '2', '3']
+    clist = curio.run(c.list())
+    assert clist == ['1', '2', '3']
     c = cmdy.echo('12 1>&2', cmdy_shell=True).async_().iter(STDERR)
-    assert curio.run(c.list()) == ['12']
+    clist = curio.run(c.list())
+    assert clist == ['12']
