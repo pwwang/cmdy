@@ -176,6 +176,9 @@ class Cmdy:
         """Direct subcommand"""
         if name in ('b', 'bake'):
             return self._bake
+        # when calling getattr(cmdy, '__wrapped__'), should return False
+        if name[:2] == name[-2:] and len(name) > 4:
+            raise AttributeError
 
         self._args.append(name)
         return self
