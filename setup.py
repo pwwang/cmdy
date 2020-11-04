@@ -35,8 +35,7 @@ setup(
     package_dir={"": "."},
     package_data={"cmdy": ["*.bak"]},
     install_requires=[
-        'curio==1.*,>=1.2.0', 'diot', 'modkit', 'python-simpleconf',
-        'python-varname'
+        'curio==1.*,>=1.2.0', 'diot', 'modkit', 'python-simpleconf', 'varname'
     ],
     extras_require={"dev": ["pytest", "pytest-cov"]},
 )

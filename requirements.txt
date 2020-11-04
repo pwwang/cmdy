@@ -4,4 +4,4 @@ modkit
 pytest
 pytest-cov
 python-simpleconf
-python-varname
+varname

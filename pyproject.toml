@@ -16,7 +16,7 @@ repository = "https://github.com/pwwang/cmdy"
 python = "^3.6"
 modkit = "*"
 python-simpleconf = "*"
-python-varname = "*"
+varname = "*"
 curio = "^1.2"
 diot = "*"
 
