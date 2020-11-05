@@ -131,4 +131,7 @@ dmypy.json
 
 *.bak
 
+.history/
+t-*.ipynb
+
 # End of https://www.gitignore.io/api/python

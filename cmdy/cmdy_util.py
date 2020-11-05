@@ -129,12 +129,12 @@ class _CmdySyncStreamFromAsync:
         try:
             return curio.run(self._fetch_next(timeout))
         except StopAsyncIteration:
-            raise StopIteration()
+            raise StopIteration() from None
         except curio.TaskTimeout:
             return '' if self.encoding else b''
 
     def __next__(self):
-        return self.next()
+        return self.next() # pylint: disable=not-callable
 
     def __iter__(self):
         return self
@@ -475,7 +475,7 @@ def _cmdy_parse_args(name: str,
                 global_config=global_config
             )
             if any(key in pure_cmd_kwargs for key in pure_cmd_kwargs_seg):
-                warnings.warn(f"Argument has been specified "
+                warnings.warn("Argument has been specified "
                               "in both *args and **kwargs. "
                               "The one in *args will be ignored.",
                               UserWarning)

@@ -43,6 +43,8 @@ from modkit import modkit as _modkit
 
 __version__ = "0.4.2"
 
+# pylint: disable=invalid-overridden-method
+
 # We cannot define the variables that need to be baked
 # in submodules, because we don't want to deepcopy the
 # whole module.
@@ -501,7 +503,7 @@ class CmdyAsyncResult(CmdyResult):
         except _curio.TaskTimeout:
             self.proc.kill()
             raise CmdyTimeoutError("Timeout after "
-                                   f"{self.holding.timeout} seconds.")
+                                   f"{self.holding.timeout} seconds.") from None
         else:
             if self._rc not in self.holding.okcode and self.holding.raise_:
                 await _cmdy_raise_return_code_error(self)
@@ -934,7 +936,7 @@ class CmdyPluginIter:
 
     @cmdy_plugin_add_method(CmdyResult)
     def __next__(self):
-        return self.next()
+        return self.next() # pylint: disable=not-callable
 
     @cmdy_plugin_add_method(CmdyResult)
     def next(self, timeout=None):
