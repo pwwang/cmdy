@@ -38,7 +38,7 @@ from .cmdy_util import (STDIN, STDOUT, STDERR, DEVNULL,
                         _CmdySyncStreamFromAsync)
 from .cmdy_plugin import _cmdy_hook_class, _CmdyPluginProxy
 
-__version__ = "0.4.2"
+__version__ = "0.4.3"
 
 # pylint: disable=invalid-overridden-method
 
