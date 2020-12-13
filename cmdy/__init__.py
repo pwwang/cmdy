@@ -25,7 +25,8 @@ from diot import Diot as _Diot
 from simpleconf import Config as _Config
 import curio as _curio
 from curio import subprocess as _subprocess
-from varname import will as _will
+from varname import will as _will, varname as _varname
+from modkit import install as _install, bake as _bake
 from .cmdy_util import (STDIN, STDOUT, STDERR, DEVNULL,
                         CmdyActionError, CmdyTimeoutError,
                         CmdyExecNotFoundError, CmdyReturnCodeError,
@@ -36,10 +37,6 @@ from .cmdy_util import (STDIN, STDOUT, STDERR, DEVNULL,
                         _cmdy_property_or_method,
                         _CmdySyncStreamFromAsync)
 from .cmdy_plugin import _cmdy_hook_class, _CmdyPluginProxy
-# We have to put this in the final position to
-# make modkit detect the submodules
-# pylint: disable=wrong-import-order
-from modkit import modkit as _modkit
 
 __version__ = "0.4.2"
 
@@ -123,7 +120,6 @@ class Cmdy:
         _args, _kwargs, _cfgargs, _popenargs = _cmdy_parse_args(
             self._name, args, kwargs, CMDY_CONFIG, _CMDY_BAKED_ARGS
         )
-
         ready_args = (self._args or []) + _args
         ready_kwargs = self._kwargs.copy() if self._kwargs else {}
         ready_kwargs.update(_kwargs)
@@ -1110,18 +1106,14 @@ CMDY_PLUGIN_REDIRECT = CmdyPluginRedirect()
 CMDY_PLUGIN_PIPE = CmdyPluginPipe()
 CMDY_PLUGIN_VALUE = CmdyPluginValue()
 
-@_modkit.delegate
-def _modkit_delegate(module, name):
-    return module.Cmdy(name)
+def __getattr__(name):
+    return Cmdy(name)
 
-@_modkit.call
-def _modkit_call(module, assigned_to, **kwargs):
-    # Module is deeply copied
-    newmod = module.__bake__(assigned_to)
+def __call__(**kwargs):
+    new_name = _varname(2)
+    new_mod = _bake(new_name)
 
-    newmod._CMDY_BAKED_ARGS.update(module._CMDY_BAKED_ARGS)
-    newmod._CMDY_BAKED_ARGS.update(kwargs)
-    return newmod
+    new_mod._CMDY_BAKED_ARGS.update(kwargs)
+    return new_mod
 
-# not banning anything with modkit
-# but conventionally names start with _ should not be exported
+_install()

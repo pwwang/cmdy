@@ -256,6 +256,8 @@ def test_iter_stderr():
 
 def test_module_baking():
     sh = cmdy(n=True)
+    assert id(sh) != id(cmdy)
+    assert id(sh.Cmdy) != id(cmdy.Cmdy)
     assert id(sh._CMDY_EVENT) != id(_CMDY_EVENT)
     assert id(sh._CMDY_BAKED_ARGS) != id(cmdy._CMDY_BAKED_ARGS)
     strcmd = sh.Cmdy('echo')(_=123).strcmd
@@ -272,7 +274,7 @@ def test_module_baking():
     c = sh.echo() # ran
     assert isinstance(c, sh.CmdyResult)
 
-    sh2 = sh(e=True)
+    sh2 = sh(n=True, e=True)
     c = sh2.echo(_=1).h()
     assert c.strcmd == 'echo -n -e 1'
 
