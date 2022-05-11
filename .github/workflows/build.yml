@@ -23,7 +23,7 @@ jobs:
           python -m pip install poetry
           poetry config virtualenvs.create false
           poetry install -v
-          poetry install flake8
+          pip install -U flake8
       - name: Run flake8
         run: flake8 cmdy
       - name: Test with pytest
