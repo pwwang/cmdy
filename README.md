@@ -376,20 +376,20 @@ For example, if you want to run ls as ls -l all the time:
 
 ```python
 from cmdy import ls
-ll = ls.bake(l=True)
+ll = ls._(l=True)
 print(ll().h.cmd) # ['ls', '-l']
 print(ll(a=True).h.cmd) # ['ls', '-l', '-a']
 # I don't want the l flag for some commands occasionally
 print(ll(l=False).h.cmd) # ['ls']
 
 # Bake a baked command
-lla = ll.bake(a=True)
+lla = ll._(a=True)
 print(lla().h.cmd) # ['ls', '-l', '-a']
 ```
 
 ```python
 # I know git is always gonna run with subcommand
-git = git.bake(_sub=True)
+git = git._(_sub=True)
 # don't bother to pass _sub=True every time
 print(git(git_dir='.').branch(v=True).h)
 # <CmdyHolding: ['git', '--git-dir', '.', 'branch', '-v']>
@@ -398,11 +398,11 @@ print(git().status().h)
 ```
 
 ```python
-# What if I have a subcommand call 'bake'?
+# What if I have a subcommand call bake?
 from cmdy import git, CmdyActionError
 
 print(git.branch().h.cmd) # ['git', 'branch']
-print(type(git.bake())) # <class 'cmdy.Cmdy'>
+print(type(git._())) # <class 'cmdy.Cmdy'>
 
 # run the git with _sub
 print(git(_sub=True).bake().h.cmd) # ['git', 'bake']
@@ -505,18 +505,17 @@ All those actions for holding/result objects were implemented internally as plug
 
 A plugin has to be defined as a class and then instantiated.
 
-**There are 6 APIs for developing a plugin for `cmdy`**
+**There are 5 APIs for developing a plugin for `cmdy`**
 
-- `cmdy_plugin`: A decorator for the plugin class
-- `cmdy_plugin_hold_then`: A decorator to decorate methods in the plugin class, which define actions after a holding object. Arguments:
+- `cmdy._plugin_factory.register`: A decorator for the plugin class
+- `cmdy._plugin_factory.hold_then`: A decorator to decorate methods in the plugin class, which define actions after a holding object. Arguments:
   - `alias`: The alias of this action (e.g. `r/redir` for `redirect`)
   - `final`: Whether this is a final action, meaning no other actions should be followed
   - `prop`: Whether this action can be called as a property
   - `hold_right`: Should I put right following action on hold? This is useful when we have connectors which then can set the command running. (e.g `>` for redirect and `|` for pipe)
-- `cmdy_plugin_run_then`: A decorator to decorate methods in the plugin class, which define actions after a sync result object. Arguments are similar as `cmdy_plugin_hold_then` except that `prop` and `hold_right` are not avaialbe.
-- `cmdy_plugin_async_run_then`: Async verion of `cmdy_plugin_run_then`
-- `cmdy_plugin_add_method`: A decorator to decorate methods in the plugin class, which add methods to the `CmdyHolding`, `CmdyResult` or `CmdyAsyncResult` class. `cls` is the only argument that specifies which class we are hacking.
-- `cmdy_plugin_add_property`: Property version of `cmdy_plugin_add_method`
+- `cmdy._plugin_factory.run_then`: A decorator to decorate methods in the plugin class, which define actions after a sync result object. Arguments are similar as `cmdy._plugin_factory.hold_then` except that `prop` and `hold_right` are not avaialbe.
+- `async_run_then.add_method`: A decorator to decorate methods in the plugin class, which add methods to the `CmdyHolding`, `CmdyResult` or `CmdyAsyncResult` class. `cls` is the only argument that specifies which class we are hacking.
+- `async_run_then.add_property`: Property version of `cmdy_plugin_add_method`
 
 **Notes on name conflicts:**
 
@@ -524,34 +523,37 @@ If we need to add the methods to multiple classes in the plugin with the same na
 
 **Notes on module baking:**
 
-- As we mentioned before, `cmdy` module baking are deep copying. So when we can pass the class name instead of the class itself (which you may be not sure which one to use, the orginal one or the one from the baking module) to the `add_method` and `add_property` hooks.
+- Always use the baked module to get those classes
+    ```pytho
+    import cmdy
+    cmdy2 = cmdy()
+
+    @cmdy2._plugin_factory.register
+    class MyPlugin:
+        ...
+    ```
 - Plugin enable and disable only take effect within the same module. For example:
 
     ```python
     import cmdy
-    from cmdy import CMDY_PLUGIN_FG
     sh = cmdy()
     # only affects cmdy not sh
-    CMDY_PLUGIN_FG.disable()
+    sh._plugins.fg.disable()
     # to disable this plugin for sh as well:
-    sh.CMDY_PLUGIN_FG.disable()
+    sh._plugins.fg.disable()
     ```
 
 ```python
 # An example to define a plugin
-from cmdy import (cmdy_plugin,
-                  cmdy_plugin_hold_then,
-                  cmdy_plugin_add_method,
-                  ls,
-                  CmdyActionError)
+import cmdy
 
-@cmdy_plugin
+@cmdy._plugin_factory.register
 class MyPlugin:
-    @cmdy_plugin_add_method("CmdyHolding")
+    @cmdy._plugin_factory.add_method(cmdy.CmdyHolding)
     def say_hello(self):
         return 'Hello world!'
 
-    @cmdy_plugin_hold_then('hello')
+    @cmdy._plugin_factory.hold_then('hello')
     def helloworld(self):
         print(self.say_hello())
         # keep chaining
@@ -561,13 +563,13 @@ myplugin = MyPlugin()
 
 # command will never run,
 # because we didn't do self.run() in helloworld(self)
-ls().helloworld() # prints Hello world!
+ls().helloworld()  # prints Hello world!
 # property calls enabled by default
-ls().helloworld # prints Hello world!
+ls().helloworld  # prints Hello world!
 # we have alias
-ls().hello # prints Hello world!
-```
+ls().hello  # prints Hello world!
 
+```
 
 [1]: https://img.shields.io/pypi/v/cmdy?style=flat-square
 [2]: https://pypi.org/project/cmdy/
@@ -575,7 +577,7 @@ ls().hello # prints Hello world!
 [4]: https://github.com/pwwang/cmdy
 [5]: https://img.shields.io/travis/pwwang/cmdy?style=flat-square
 [6]: https://travis-ci.org/pwwang/cmdy
-[7]: https://img.shields.io/codacy/grade/c82a7081cfc94f089199dafed484e5c3?style=flat-square
+[7]: https://img.shields.io/codacy/grade/fa12f06d39404f98b94c19e83865fd4e?style=flat-square
 [8]: https://app.codacy.com/project/pwwang/cmdy/dashboard
-[9]: https://img.shields.io/codacy/coverage/c82a7081cfc94f089199dafed484e5c3?style=flat-square
+[9]: https://img.shields.io/codacy/coverage/fa12f06d39404f98b94c19e83865fd4e?style=flat-square
 [10]: https://img.shields.io/pypi/pyversions/cmdy?style=flat-square

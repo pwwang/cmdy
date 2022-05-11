@@ -1,19 +1,20 @@
 import pytest
-import sys
 import cmdy
-from diot import Diot
-from cmdy import (cmdy_plugin, cmdy_plugin_add_method, cmdy_plugin_add_property,
-                  CmdyHolding, CmdyActionError, _cmdy_hook_class,
-                  CmdyAsyncResult, _cmdy_parse_args, STDERR,
-                  CMDY_CONFIG, _CMDY_BAKED_ARGS, cmdy_plugin_add_method,
-                  cmdy_plugin_hold_then, cmdy_plugin_run_then, cmdy_plugin_async_run_then)
+
 import curio
+from diot import Diot
+
+from cmdy.cmdy_defaults import get_config
+from cmdy.cmdy_plugin import pluginable
+from cmdy.cmdy_utils import parse_args
 
 # testing errors, async and combined use of iter, pipe, redirect
 # normal functions are tested in test_cmdy.py
 
+
 def test_plugin():
-    @cmdy_plugin
+    bakeable = cmdy()
+    @bakeable._plugin_factory.register
     class Plugin:
         def method(self):
             pass
@@ -29,36 +30,38 @@ def test_plugin():
 
 def test_add_method_string():
 
-    @cmdy_plugin
+    bakeable = cmdy()
+
+    @bakeable._plugin_factory.register
     class PluginWithString:
-        @cmdy_plugin_add_method("CmdyHolding")
+        @bakeable._plugin_factory.add_method(bakeable.CmdyHolding)
         def _xyz(self):
             return 1
 
-        @cmdy_plugin_add_property("CmdyHolding")
+        @bakeable._plugin_factory.add_property(bakeable.CmdyHolding)
         def _mno(self):
             return 2
 
-        @cmdy_plugin_hold_then
+        @bakeable._plugin_factory.hold_then
         def xyz(self):
             return self._xyz() + self._mno
 
     pws = PluginWithString()
 
-    xyz = cmdy.echo().xyz()
+    xyz = bakeable.echo().xyz()
     assert xyz == 3
 
 def test_cmdy_plugin_add_method():
+    bakeable = cmdy()
 
+    @pluginable
     class Base:
         def __init__(self):
             self.base = 1
 
-    _cmdy_hook_class(Base)
-
-    @cmdy_plugin
+    @bakeable._plugin_factory.register
     class Plugin:
-        @cmdy_plugin_add_method(Base)
+        @bakeable._plugin_factory.add_method(Base)
         def add(self):
             return self.base + 1
 
@@ -70,11 +73,13 @@ def test_cmdy_plugin_add_method():
     with pytest.raises(AttributeError):
         b.add()
 
-    # p.enable()
-    # assert b.add() == 2
+    p.enable()
+    assert b.add() == 2
 
 def test_cmdy_plugin_add_method_override():
+    bakeable = cmdy()
 
+    @pluginable
     class Base:
         def __init__(self):
             self.base = 1
@@ -82,11 +87,9 @@ def test_cmdy_plugin_add_method_override():
         def add(self):
             return self.base + 10
 
-    _cmdy_hook_class(Base)
-
-    @cmdy_plugin
+    @bakeable._plugin_factory.register
     class Plugin:
-        @cmdy_plugin_add_method(Base)
+        @bakeable._plugin_factory.add_method(Base)
         def add(self):
             return self._original('add')(self) + 1
 
@@ -103,7 +106,8 @@ def test_cmdy_plugin_add_method_override():
 
 
 def test_cmdy_plugin_add_method_multi_override():
-
+    bakeable = cmdy()
+    @pluginable
     class Base:
         def __init__(self):
             self.base = 1
@@ -111,17 +115,15 @@ def test_cmdy_plugin_add_method_multi_override():
         def add(self):
             return self.base + 10
 
-    _cmdy_hook_class(Base)
-
-    @cmdy_plugin
+    @bakeable._plugin_factory.register
     class Plugin:
-        @cmdy_plugin_add_method(Base)
+        @bakeable._plugin_factory.add_method(Base)
         def add(self):
             return self._original('add')(self) + 1
 
-    @cmdy_plugin
+    @bakeable._plugin_factory.register
     class Plugin2:
-        @cmdy_plugin_add_method(Base)
+        @bakeable._plugin_factory.add_method(Base)
         def add(self):
             return self._original('add')(self) * 2
 
@@ -131,7 +133,9 @@ def test_cmdy_plugin_add_method_multi_override():
     assert b.add() == 24 # not 22
 
 def test_cmdy_plugin_add_method_multi_override_disable():
+    bakeable = cmdy()
 
+    @pluginable
     class Base:
         def __init__(self):
             self.base = 1
@@ -139,17 +143,15 @@ def test_cmdy_plugin_add_method_multi_override_disable():
         def add(self):
             return self.base + 10
 
-    _cmdy_hook_class(Base)
-
-    @cmdy_plugin
+    @bakeable._plugin_factory.register
     class Plugin:
-        @cmdy_plugin_add_method(Base)
+        @bakeable._plugin_factory.add_method(Base)
         def add(self):
             return self._original('add')(self) + 1
 
-    @cmdy_plugin
+    @bakeable._plugin_factory.register
     class Plugin2:
-        @cmdy_plugin_add_method(Base)
+        @bakeable._plugin_factory.add_method(Base)
         def add(self):
             return self._original('add')(self) * 2
 
@@ -160,15 +162,15 @@ def test_cmdy_plugin_add_method_multi_override_disable():
     assert b.add() == 22
 
 def test_cmdy_plugin_add_property():
-
+    bakeable = cmdy()
+    @pluginable
     class Base:
         def __init__(self):
             self.base = 1
-    _cmdy_hook_class(Base)
 
-    @cmdy_plugin
+    @bakeable._plugin_factory.register
     class Plugin:
-        @cmdy_plugin_add_property(Base)
+        @bakeable._plugin_factory.add_property(Base)
         def base1(self):
             return self.base + 1
 
@@ -184,7 +186,8 @@ def test_cmdy_plugin_add_property():
     # assert b.base1 == 2
 
 def test_cmdy_plugin_add_property_override():
-
+    bakeable = cmdy()
+    @pluginable
     class Base:
         def __init__(self):
             self.base = 1
@@ -193,11 +196,9 @@ def test_cmdy_plugin_add_property_override():
         def base1(self):
             return self.base + 10
 
-    _cmdy_hook_class(Base)
-
-    @cmdy_plugin
+    @bakeable._plugin_factory.register
     class Plugin:
-        @cmdy_plugin_add_property(Base)
+        @bakeable._plugin_factory.add_property(Base)
         def base1(self):
             return self._original('base1').fget(self) + 1
 
@@ -212,7 +213,8 @@ def test_cmdy_plugin_add_property_override():
     # assert b.base1 == 12
 
 def test_cmdy_plugin_add_property_multi_override():
-
+    bakeable = cmdy()
+    @pluginable
     class Base:
         def __init__(self):
             self.base = 1
@@ -221,17 +223,15 @@ def test_cmdy_plugin_add_property_multi_override():
         def base1(self):
             return self.base + 10
 
-    _cmdy_hook_class(Base)
-
-    @cmdy_plugin
+    @bakeable._plugin_factory.register
     class Plugin:
-        @cmdy_plugin_add_property(Base)
+        @bakeable._plugin_factory.add_property(Base)
         def base1(self):
             return self._original('base1').fget(self) + 1
 
-    @cmdy_plugin
+    @bakeable._plugin_factory.register
     class Plugin2:
-        @cmdy_plugin_add_property(Base)
+        @bakeable._plugin_factory.add_property(Base)
         def base1(self):
             return self._original('base1').fget(self) * 2
 
@@ -241,7 +241,9 @@ def test_cmdy_plugin_add_property_multi_override():
     assert b.base1 == 24
 
 def test_cmdy_plugin_add_property_multi_override():
+    bakeable = cmdy()
 
+    @pluginable
     class Base:
         def __init__(self):
             self.base = 1
@@ -250,17 +252,15 @@ def test_cmdy_plugin_add_property_multi_override():
         def base1(self):
             return self.base + 10
 
-    _cmdy_hook_class(Base)
-
-    @cmdy_plugin
+    @bakeable._plugin_factory.register
     class Plugin:
-        @cmdy_plugin_add_property(Base)
+        @bakeable._plugin_factory.add_property(Base)
         def base1(self):
             return self._original('base1').fget(self) + 1
 
-    @cmdy_plugin
+    @bakeable._plugin_factory.register
     class Plugin2:
-        @cmdy_plugin_add_property(Base)
+        @bakeable._plugin_factory.add_property(Base)
         def base1(self):
             return self._original('base1').fget(self) * 2
 
@@ -271,50 +271,55 @@ def test_cmdy_plugin_add_property_multi_override():
     assert b.base1 == 22
 
 def test_hold_then():
-
-    @cmdy_plugin
+    bakeable = cmdy()
+    @bakeable._plugin_factory.register
     class Plugin:
-        @cmdy_plugin_hold_then
+        @bakeable._plugin_factory.hold_then
         def test(self):
             self.stdin = 123
             return self
 
     assert callable(Plugin.test.enable)
     p = Plugin()
-    assert callable(CmdyHolding.test.fget)
-    args, kwargs, config, pconfig = _cmdy_parse_args(
+    assert callable(bakeable.CmdyHolding.test.fget)
+    args = parse_args(
         'echo', ['echo', '123'], {},
-        CMDY_CONFIG, _CMDY_BAKED_ARGS
+        get_config(), bakeable._baking_args
     )
-    config_copy = CMDY_CONFIG.copy()
-    config_copy.update(config)
-    h = CmdyHolding(args, kwargs, config_copy, pconfig, will='test').test()
+    config_copy = get_config().copy()
+    config_copy.update(args.config)
+    h = bakeable.CmdyHolding(
+        Diot(args=args.args, kwargs=args.kwargs, config=config_copy, popen=args.popen),
+        bakeable,
+        will='test',
+    ).test()
     assert h.stdin == 123
 
 def test_run_then():
+    bakeable = cmdy()
 
-    @cmdy_plugin
+    @bakeable._plugin_factory.register
     class Plugin:
-        @cmdy_plugin_run_then
+        @bakeable._plugin_factory.run_then
         def ev(self):
             return eval(self.stdout)
 
     Plugin()
-    x = cmdy.echo(n = '{"a": 1}').ev()
+    x = bakeable.echo(n = '{"a": 1}').ev()
     assert x == {"a": 1}
 
 
 def test_final():
     # cmd = cmdy.echo().h()
-    with pytest.raises(CmdyActionError):
+    with pytest.raises(cmdy.CmdyActionError):
         cmdy.echo().h().fg().iter()
 
 def test_run_then_async():
-
-    @cmdy_plugin
+    bakeable = cmdy()
+    @bakeable._plugin_factory.register
     class Plugin:
 
-        @cmdy_plugin_async_run_then('o')
+        @bakeable._plugin_factory.run_then('o')
         async def out(self):
             ret = []
             async for line in self:
@@ -322,7 +327,7 @@ def test_run_then_async():
 
             return ''.join(ret)
 
-        @cmdy_plugin_async_run_then
+        @bakeable._plugin_factory.run_then
         async def list(self):
             ret = []
             async for line in self:
@@ -331,17 +336,17 @@ def test_run_then_async():
 
     Plugin()
 
-    c = cmdy.echo('1\n2\n3').async_()
-    assert isinstance(c, CmdyAsyncResult)
+    c = bakeable.echo('1\n2\n3').async_()
+    assert isinstance(c, bakeable.CmdyAsyncResult)
 
     assert curio.run(c.rc) == 0
     assert curio.run(c.rc) == 0 # trigger self._rc is not None
     out = curio.run(c.out())
     assert out == '123'
 
-    c = cmdy.echo('1\n2\n3').async_()
+    c = bakeable.echo('1\n2\n3').async_()
     clist = curio.run(c.list())
     assert clist == ['1', '2', '3']
-    c = cmdy.echo('12 1>&2', cmdy_shell=True).async_().iter(STDERR)
+    c = bakeable.echo('12 1>&2', cmdy_shell=True).async_().iter(bakeable.STDERR)
     clist = curio.run(c.list())
     assert clist == ['12']

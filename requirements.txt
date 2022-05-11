@@ -1,7 +1,0 @@
-curio==1.*,>=1.2.0
-diot
-modkit
-pytest
-pytest-cov
-python-simpleconf
-varname

@@ -4,7 +4,7 @@ build-backend = "poetry.masonry.api"
 
 [tool.poetry]
 name = "cmdy"
-version = "0.4.3"
+version = "0.5.0"
 description = "Shell language to run command in python"
 authors = [ "pwwang <pwwang@pwwang.com>",]
 license = "MIT"
@@ -13,13 +13,29 @@ homepage = "https://github.com/pwwang/cmdy"
 repository = "https://github.com/pwwang/cmdy"
 
 [tool.poetry.dependencies]
-python = "^3.6"
-modkit = "*"
-python-simpleconf = "*"
-varname = "*"
-curio = "^1.2"
-diot = "*"
+python = "^3.7"
+python-simpleconf = "0.5"
+varname = "0.8"
+curio = "^1.5"
+diot = "^0.1"
 
 [tool.poetry.dev-dependencies]
-pytest = "*"
-pytest-cov = "*"
+pytest = "^7"
+pytest-cov = "^3"
+
+[tool.mypy]
+ignore_missing_imports = true
+allow_redefinition = true
+disable_error_code = ["attr-defined", "no-redef", "union-attr"]
+show_error_codes = true
+strict_optional = false
+
+[tool.pytest.ini_options]
+addopts = "-vv --cov=cmdy --cov-report xml:.coverage.xml --cov-report term-missing"
+console_output_style = "progress"
+junit_family = "xunit1"
+
+[tool.black]
+line-length = 79
+target-version = ['py37', 'py38', 'py39']
+include = '\.pyi?$'
