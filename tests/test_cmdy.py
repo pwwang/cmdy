@@ -333,9 +333,12 @@ def test_module_baking():
     c = sh.echo()  # ran
     assert isinstance(c, sh.CmdyResult)
 
+
+def test_module_baking2():
+    sh = cmdy(n=True)
     sh2 = sh(n=True, e=True)
-    c = sh2.echo(_=1).h()
-    assert c.strcmd == "echo -n -e 1"
+    c = sh2.echo(_=1)
+    assert c == "1"
 
     assert (
         sh.CmdyExecNotFoundError
