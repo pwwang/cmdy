@@ -17,7 +17,8 @@ python = "^3.7"
 python-simpleconf = {version = "^0.5", extras = ["toml"]}
 varname = "^0.8"
 curio = "^1.5"
-diot = "^0.1"
+## required by python-simpleconf
+# diot = "^0.1"
 
 [tool.poetry.dev-dependencies]
 pytest = "^7"
