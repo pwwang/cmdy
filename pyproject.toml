@@ -4,7 +4,7 @@ build-backend = "poetry.masonry.api"
 
 [tool.poetry]
 name = "cmdy"
-version = "0.5.0"
+version = "0.5.1"
 description = "Shell language to run command in python"
 authors = [ "pwwang <pwwang@pwwang.com>",]
 license = "MIT"
@@ -15,7 +15,7 @@ repository = "https://github.com/pwwang/cmdy"
 [tool.poetry.dependencies]
 python = "^3.7"
 python-simpleconf = {version = "^0.5", extras = ["toml"]}
-varname = "^0.8"
+varname = "^0.9"
 curio = "^1.5"
 ## required by python-simpleconf
 # diot = "^0.1"
