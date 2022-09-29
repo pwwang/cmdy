@@ -58,11 +58,14 @@ inflection = ">=0.5,<0.6"
 
 [[package]]
 name = "executing"
-version = "1.0.0"
+version = "1.1.0"
 description = "Get the currently executing AST node of a frame, and other information"
 category = "main"
 optional = false
 python-versions = "*"
+
+[package.extras]
+tests = ["asttokens", "littleutils", "pytest", "rich"]
 
 [[package]]
 name = "importlib-metadata"
@@ -223,14 +226,14 @@ python-versions = ">=3.7"
 
 [[package]]
 name = "varname"
-version = "0.9.1"
+version = "0.10.0"
 description = "Dark magics about variable names in python."
 category = "main"
 optional = false
 python-versions = ">=3.6,<4.0"
 
 [package.dependencies]
-executing = ">=1.0,<2.0"
+executing = ">=1.1,<2.0"
 
 [package.extras]
 all = ["asttokens (>=2.0.0,<3.0.0)", "pure_eval (<1.0.0)"]
@@ -250,7 +253,7 @@ testing = ["func-timeout", "jaraco.itertools", "pytest (>=6)", "pytest-black (>=
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.7"
-content-hash = "b881b06d5eed8f9c6ad969b23012475ef9207351bd37ed0168700d8b1910f72a"
+content-hash = "3dc99ddff0dbafd6734b2ce078328507ba583774d7fc8deb95f578d4cffd854b"
 
 [metadata.files]
 attrs = [
@@ -321,8 +324,8 @@ diot = [
     {file = "diot-0.1.6.tar.gz", hash = "sha256:1dcfc37dff406c96020d14350c05f920cb7446c3e5abf3477cf2ae0587f72066"},
 ]
 executing = [
-    {file = "executing-1.0.0-py2.py3-none-any.whl", hash = "sha256:550d581b497228b572235e633599133eeee67073c65914ca346100ad56775349"},
-    {file = "executing-1.0.0.tar.gz", hash = "sha256:98daefa9d1916a4f0d944880d5aeaf079e05585689bebd9ff9b32e31dd5e1017"},
+    {file = "executing-1.1.0-py2.py3-none-any.whl", hash = "sha256:4a6d96ba89eb3dcc11483471061b42b9006d8c9f81c584dd04246944cd022530"},
+    {file = "executing-1.1.0.tar.gz", hash = "sha256:2c2c07d1ec4b2d8f9676b25170f1d8445c0ee2eb78901afb075a4b8d83608c6a"},
 ]
 importlib-metadata = [
     {file = "importlib_metadata-4.12.0-py3-none-any.whl", hash = "sha256:7401a975809ea1fdc658c3aa4f78cc2195a0e019c5cbc4c06122884e9ae80c23"},
@@ -411,8 +414,8 @@ typing-extensions = [
     {file = "typing_extensions-4.3.0.tar.gz", hash = "sha256:e6d2677a32f47fc7eb2795db1dd15c1f34eff616bcaf2cfb5e997f854fa1c4a6"},
 ]
 varname = [
-    {file = "varname-0.9.1-py3-none-any.whl", hash = "sha256:01a2a812177c8535a224846d6d7bbdff6a983185151d2e710ed6d39bf55c1d99"},
-    {file = "varname-0.9.1.tar.gz", hash = "sha256:b3a7f58a6254be33a2bc167edd2419d3e4479723963315f5b0723c1269a33fd2"},
+    {file = "varname-0.10.0-py3-none-any.whl", hash = "sha256:20748d5cd3e125350726cd39d2cbd0e3000f30b3e0d3d5fe827efa0e71729809"},
+    {file = "varname-0.10.0.tar.gz", hash = "sha256:045f7a409b3e91a760ab10a5539aabbb292db9d685f3011920b85fd4dbc5b9e3"},
 ]
 zipp = [
     {file = "zipp-3.8.1-py3-none-any.whl", hash = "sha256:47c40d7fe183a6f21403a199b3e4192cca5774656965b0a4988ad2f8feb5f009"},

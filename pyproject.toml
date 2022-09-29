@@ -15,7 +15,7 @@ repository = "https://github.com/pwwang/cmdy"
 [tool.poetry.dependencies]
 python = "^3.7"
 python-simpleconf = {version = "^0.5", extras = ["toml"]}
-varname = "^0.9"
+varname = "^0.10"
 curio = "^1.5"
 ## required by python-simpleconf
 # diot = "^0.1"
