@@ -4,13 +4,16 @@ build-backend = "poetry.masonry.api"
 
 [tool.poetry]
 name = "cmdy"
-version = "0.5.3"
+version = "0.5.4"
 description = "Shell language to run command in python"
 authors = [ "pwwang <pwwang@pwwang.com>",]
 license = "MIT"
 readme = "README.md"
 homepage = "https://github.com/pwwang/cmdy"
 repository = "https://github.com/pwwang/cmdy"
+
+[tool.poetry.build]
+generate-setup-file = true
 
 [tool.poetry.dependencies]
 python = "^3.7"
