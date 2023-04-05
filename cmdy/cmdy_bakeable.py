@@ -51,4 +51,9 @@ class Bakeable:
         return self.__class__(**baking_args)
 
     def __getattr__(self, name: str):
+        if name.startswith("__"):
+            try:
+                return globals()[name]
+            except KeyError:
+                raise AttributeError
         return self.Cmdy(name, bakeable=self)
