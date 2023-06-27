@@ -8,4 +8,5 @@ while read line; do
 done
 """
 
+print("Enter q to quit")
 bash(c=echo_bash, _fg=True).wait()
